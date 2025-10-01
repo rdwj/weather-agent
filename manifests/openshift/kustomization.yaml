@@ -1,0 +1,43 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: weather-agent
+
+# Common labels for all resources
+commonLabels:
+  app: weather-agent
+  app.kubernetes.io/name: weather-agent
+  app.kubernetes.io/managed-by: kustomize
+
+# Resources to deploy
+resources:
+  # Common resources
+  - common/configmap.yaml
+  - common/secret-template.yaml
+
+  # Redis cache
+  - redis/deployment.yaml
+
+  # API deployment
+  - api/deployment.yaml
+
+  # UI deployment
+  - ui/deployment.yaml
+
+# Images that can be updated
+images:
+  - name: weather-agent-api
+    newName: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent-api
+    newTag: latest
+  - name: weather-agent-ui
+    newName: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent-ui
+    newTag: latest
+
+# Patches for environment-specific configuration
+patchesStrategicMerge: []
+
+# ConfigMap generator for environment-specific config
+configMapGenerator: []
+
+# Secret generator for environment-specific secrets
+secretGenerator: []

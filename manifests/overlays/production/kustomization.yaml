@@ -1,0 +1,141 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: weather-prod
+
+namePrefix: ""
+nameSuffix: ""
+
+commonLabels:
+  environment: production
+  app.kubernetes.io/environment: production
+
+bases:
+- ../../base
+
+replicas:
+- name: weather-agent
+  count: 5
+
+images:
+- name: weather-agent
+  newName: registry.redhat.io/weather-system/weather-agent
+  newTag: 1.0.0
+
+configMapGenerator:
+- name: weather-agent-config
+  behavior: merge
+  literals:
+  - ENVIRONMENT=production
+  - LOG_LEVEL=INFO
+  - SERVER_RELOAD=false
+  - OAUTH2_ENABLED=false
+  - FEATURE_RATE_LIMITING_ENABLED=false
+  - REDIS_URL=redis://redis-cluster:6379
+  - MCP_SERVER_URL=http://weather-mcp-prod:3000
+  - OTEL_EXPORTER_OTLP_ENDPOINT=http://opentelemetry-collector:4317
+  - CORS_ALLOWED_ORIGINS=https://weather.apps.openshift.local
+  - REQUEST_TIMEOUT_SECONDS=30
+  - CACHE_TTL_SECONDS=900
+  - SESSION_TTL_SECONDS=1800
+  - RATE_LIMIT_GLOBAL_PER_MINUTE=5000
+  - RATE_LIMIT_USER_PER_MINUTE=200
+
+patchesStrategicMerge:
+- |-
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: weather-agent
+  spec:
+    template:
+      metadata:
+        annotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "9090"
+          prometheus.io/path: "/metrics"
+      spec:
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - weather-agent
+                topologyKey: kubernetes.io/hostname
+        containers:
+        - name: weather-agent
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 30
+
+- |-
+  apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    name: weather-agent
+  spec:
+    minReplicas: 5
+    maxReplicas: 20
+    metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+- |-
+  apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: weather-agent
+  spec:
+    host: weather-api.apps.openshift.local
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect

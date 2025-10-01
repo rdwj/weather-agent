@@ -1,0 +1,29 @@
+# Streamlit UI Container
+FROM registry.redhat.io/ubi9/python-311:latest
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Set working directory
+WORKDIR /opt/app-root/src
+
+# Copy requirements
+COPY requirements.txt ./
+
+# Install dependencies
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir streamlit httpx
+
+# Copy Streamlit app and config
+COPY streamlit_app.py ./
+COPY .streamlit/ ./.streamlit/
+
+# Create non-root user (already exists in UBI)
+USER 1001
+
+# Expose Streamlit port
+EXPOSE 8501
+
+# Run Streamlit
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]

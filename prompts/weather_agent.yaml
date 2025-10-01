@@ -1,0 +1,212 @@
+name: "Weather Agent Prompts"
+description: "Prompt templates for weather agent interactions"
+version: "1.0.0"
+
+prompts:
+  system_prompt:
+    name: "Weather Assistant System Prompt"
+    description: "Main system prompt for weather agent"
+    template: |
+      You are a helpful weather assistant that provides accurate, current weather information.
+      You have access to weather data through MCP tools that connect to reliable weather services.
+
+      Your capabilities include:
+      - Current weather conditions for any US location
+      - Weather forecasts from Weather.gov
+      - Temperature in both Fahrenheit and Celsius
+      - Detailed conditions including humidity and wind
+      - Weather data sourced from National Weather Service (Weather.gov)
+
+      Guidelines:
+      1. Extract location from the user's query when provided
+      2. Remember locations from previous queries in the conversation
+      3. If no location is specified and none exists in context, politely ask for one
+      4. Provide clear, concise responses with relevant details
+      5. Mention severe weather alerts when they exist for a location
+      6. Use the user's preferred temperature unit (default to Fahrenheit)
+
+      Context retention:
+      - Remember the last discussed location for follow-up queries
+      - Understand temporal context (today, tomorrow, next week)
+      - Handle pronouns like "there" or "that place" by referencing previous locations
+
+  location_elicitation:
+    name: "Location Elicitation"
+    description: "Prompt for when location is missing"
+    template: |
+      I'd be happy to help you with weather information! Could you please specify which location
+      you'd like to know about? You can provide:
+      - A city name (e.g., "New York" or "London")
+      - A city and state/country (e.g., "Austin, TX" or "Paris, France")
+      - Coordinates (e.g., "40.7128, -74.0060")
+    variables:
+      - name: "previous_locations"
+        type: "array"
+        description: "List of recently mentioned locations"
+
+  ambiguous_location:
+    name: "Ambiguous Location Clarification"
+    description: "Prompt for clarifying ambiguous locations"
+    template: |
+      I found multiple locations matching "{location_query}". Could you please be more specific?
+
+      Here are some possibilities:
+      {location_options}
+
+      Please specify which one you meant, or provide additional details like the state or country.
+    variables:
+      - name: "location_query"
+        type: "string"
+        description: "The ambiguous location query"
+      - name: "location_options"
+        type: "string"
+        description: "Formatted list of location options"
+
+  weather_response:
+    name: "Weather Response Template"
+    description: "Template for formatting weather responses"
+    template: |
+      {greeting}Weather in {location}:
+
+      Current Conditions:
+      - Temperature: {temperature}{unit} (feels like {feels_like}{unit})
+      - Conditions: {conditions}
+      - Humidity: {humidity}%
+      - Wind: {wind_speed} {wind_unit} {wind_direction}
+      {alerts_section}
+      {forecast_section}
+      {additional_info}
+    variables:
+      - name: "greeting"
+        type: "string"
+        description: "Optional greeting"
+      - name: "location"
+        type: "string"
+        description: "Location name"
+      - name: "temperature"
+        type: "number"
+        description: "Current temperature"
+      - name: "unit"
+        type: "string"
+        description: "Temperature unit (°F or °C)"
+      - name: "feels_like"
+        type: "number"
+        description: "Feels like temperature"
+      - name: "conditions"
+        type: "string"
+        description: "Weather conditions"
+      - name: "humidity"
+        type: "number"
+        description: "Humidity percentage"
+      - name: "wind_speed"
+        type: "number"
+        description: "Wind speed"
+      - name: "wind_unit"
+        type: "string"
+        description: "Wind speed unit"
+      - name: "wind_direction"
+        type: "string"
+        description: "Wind direction"
+      - name: "alerts_section"
+        type: "string"
+        description: "Weather alerts if any"
+      - name: "forecast_section"
+        type: "string"
+        description: "Forecast information if requested"
+      - name: "additional_info"
+        type: "string"
+        description: "Any additional information"
+
+  forecast_response:
+    name: "Forecast Response Template"
+    description: "Template for weather forecast responses"
+    template: |
+      {days}-day forecast for {location}:
+
+      {forecast_items}
+
+      {summary}
+    variables:
+      - name: "days"
+        type: "integer"
+        description: "Number of forecast days"
+      - name: "location"
+        type: "string"
+        description: "Location name"
+      - name: "forecast_items"
+        type: "string"
+        description: "Formatted forecast items"
+      - name: "summary"
+        type: "string"
+        description: "Optional forecast summary"
+
+  alert_notification:
+    name: "Weather Alert Notification"
+    description: "Template for weather alert notifications"
+    template: |
+      ⚠️ Weather Alert for {location}:
+
+      {severity} - {headline}
+
+      {description}
+
+      Effective: {effective_from}
+      Expires: {expires_at}
+
+      Please take appropriate precautions.
+    variables:
+      - name: "location"
+        type: "string"
+        description: "Alert location"
+      - name: "severity"
+        type: "string"
+        description: "Alert severity"
+      - name: "headline"
+        type: "string"
+        description: "Alert headline"
+      - name: "description"
+        type: "string"
+        description: "Alert description"
+      - name: "effective_from"
+        type: "string"
+        description: "Alert start time"
+      - name: "expires_at"
+        type: "string"
+        description: "Alert expiration time"
+
+  error_response:
+    name: "Error Response"
+    description: "Template for error messages"
+    template: |
+      I apologize, but I encountered an issue while getting the weather information:
+
+      {error_message}
+
+      Please try again, or try rephrasing your request.
+    variables:
+      - name: "error_message"
+        type: "string"
+        description: "Specific error message"
+
+  follow_up_context:
+    name: "Follow-up Query Context"
+    description: "Template for handling follow-up queries"
+    template: |
+      Based on our previous discussion about {previous_location}, {response}
+    variables:
+      - name: "previous_location"
+        type: "string"
+        description: "Previously discussed location"
+      - name: "response"
+        type: "string"
+        description: "Response to follow-up query"
+
+parameters:
+  temperature_precision: 0
+  include_feels_like: true
+  include_humidity: true
+  include_wind: true
+  include_uv_index: false
+  default_forecast_days: 5
+  max_forecast_days: 7
+  alert_severity_threshold: "Severe"

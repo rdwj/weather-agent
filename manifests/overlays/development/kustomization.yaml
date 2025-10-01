@@ -1,0 +1,99 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: weather-dev
+
+namePrefix: dev-
+nameSuffix: ""
+
+commonLabels:
+  environment: development
+  app.kubernetes.io/environment: development
+
+bases:
+- ../../base
+
+replicas:
+- name: weather-agent
+  count: 1
+
+images:
+- name: weather-agent
+  newName: localhost:5000/weather-agent
+  newTag: dev
+
+configMapGenerator:
+- name: weather-agent-config
+  behavior: merge
+  literals:
+  - ENVIRONMENT=development
+  - LOG_LEVEL=DEBUG
+  - SERVER_RELOAD=true
+  - OAUTH2_ENABLED=false
+  - FEATURE_RATE_LIMITING_ENABLED=false
+  - REDIS_URL=redis://redis-dev:6379
+  - MCP_SERVER_URL=http://weather-mcp-dev:3000
+  - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger-dev:4317
+  - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+  - REQUEST_TIMEOUT_SECONDS=60
+
+patchesStrategicMerge:
+- |-
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: weather-agent
+  spec:
+    template:
+      spec:
+        containers:
+        - name: weather-agent
+          env:
+          - name: DEVELOPMENT_MODE
+            value: "true"
+          - name: RELOAD_ON_CHANGE
+            value: "true"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+- |-
+  apiVersion: autoscaling/v2
+  kind: HorizontalPodAutoscaler
+  metadata:
+    name: weather-agent
+  spec:
+    minReplicas: 1
+    maxReplicas: 3
+
+- |-
+  apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: weather-agent
+  spec:
+    host: weather-agent-dev.apps.openshift.local
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Allow
+
+patchesJson6902:
+- target:
+    group: ""
+    version: v1
+    kind: ConfigMap
+    name: weather-agent-config
+  patch: |-
+    - op: add
+      path: /data/DEVELOPMENT_FEATURES
+      value: "true"
+    - op: add
+      path: /data/MOCK_MCP_RESPONSES
+      value: "true"
+    - op: add
+      path: /data/DISABLE_AUTH
+      value: "true"

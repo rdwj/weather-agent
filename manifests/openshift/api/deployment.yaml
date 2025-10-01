@@ -1,0 +1,197 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-agent-api
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-agent
+    app.openshift.io/runtime: python
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: weather-agent
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: weather-agent
+        component: api
+        app.kubernetes.io/name: weather-agent
+        app.kubernetes.io/component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: weather-agent-api
+        image: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent-api:latest
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        # Configuration from ConfigMap
+        - name: API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: API_HOST
+        - name: API_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: API_PORT
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: LOG_LEVEL
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: REDIS_PORT
+        - name: CACHE_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: CACHE_TYPE
+        - name: CACHE_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: CACHE_TTL
+        # Secrets
+        - name: MCP_URL
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: MCP_URL
+        - name: MCP_TIMEOUT
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: MCP_TIMEOUT
+        - name: LLM_URL
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: LLM_URL
+              optional: true
+        - name: LLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: LLM_API_KEY
+              optional: true
+        - name: LLM_MODEL_NAME
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: LLM_MODEL_NAME
+              optional: true
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: REDIS_PASSWORD
+              optional: true
+        - name: API_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: weather-agent-secrets
+              key: API_SECRET_KEY
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        command:
+        - python
+        - -m
+        - uvicorn
+        - src.api.weather_api:app
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8000"
+        - --workers
+        - "4"
+        - --log-level
+        - info
+        - --access-log
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-agent-api
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app: weather-agent
+    component: api
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: weather-agent-api
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+spec:
+  to:
+    kind: Service
+    name: weather-agent-api
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,76 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: weather-agent
+
+namePrefix: ""
+nameSuffix: ""
+
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/version: 1.0.0
+
+commonAnnotations:
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+- deployment.yaml
+- service.yaml
+- route.yaml
+- configmap.yaml
+- rbac.yaml
+- hpa.yaml
+- redis-deployment.yaml
+
+images:
+- name: weather-agent
+  newName: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent
+  newTag: latest
+
+replicas:
+- name: weather-agent
+  count: 3
+
+configMapGenerator:
+- name: weather-agent-version
+  literals:
+  - version=1.0.0
+  - build_date=2025-09-25
+  - git_commit=HEAD
+
+secretGenerator:
+- name: weather-agent-secrets
+  envs:
+  - secrets.env
+  type: Opaque
+  options:
+    disableNameSuffixHash: true
+
+patchesStrategicMerge:
+- |-
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: weather-agent
+  spec:
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2025-09-25T00:00:00Z"
+
+vars:
+- name: SERVICE_NAME
+  objref:
+    kind: Service
+    name: weather-agent
+    apiVersion: v1
+  fieldref:
+    fieldpath: metadata.name
+
+- name: NAMESPACE
+  objref:
+    kind: Service
+    name: weather-agent
+    apiVersion: v1
+  fieldref:
+    fieldpath: metadata.namespace

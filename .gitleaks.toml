@@ -1,0 +1,51 @@
+[allowlist]
+  description = "weather-agent allowlist for false positives"
+
+  # Ignore based on file paths
+  paths = [
+    # Example files
+    '''\/example.*\.(pem|key|yaml|yml)$''',
+    '''\/examples\/''',
+    '''\.example$''',
+
+    # Test fixtures
+    '''\/tests?\/fixtures\/''',
+    '''\/tests?\/.*\.(key|pem)$''',
+
+    # Documentation
+    '''README\.md$''',
+    '''CLAUDE\.md$''',
+    '''docs\/.*\.md$''',
+
+    # OpenShift example manifests
+    '''manifests\/.*-example\.yaml$''',
+  ]
+
+  # Ignore based on line content
+  regexes = [
+    # Test/example passwords
+    '''password.*['"]\s*['"]\s*$''',
+    '''password.*Pass123''',
+    '''password.*example''',
+    '''password.*test123''',
+
+    # Documentation placeholders
+    '''# Your (private key|certificate|api key|token) here''',
+    '''<your-.*-here>''',
+    '''REPLACE_WITH_YOUR''',
+    '''YOUR_.*_HERE''',
+    '''CHANGEME''',
+    '''PLACEHOLDER''',
+
+    # Example API keys (obvious placeholders)
+    '''(api[_-]?key|token).*xxx+''',
+    '''(api[_-]?key|token).*000+''',
+  ]
+
+  # Ignore commits (can add known safe commits here)
+  commits = []
+
+  # Ignore by stopwords in commit messages
+  stopwords = [
+    '''wip''',
+  ]

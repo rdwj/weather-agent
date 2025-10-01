@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: weather-agent
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+  annotations:
+    serviceaccounts.openshift.io/oauth-redirecturi.first: https://weather-agent.apps.openshift.local/oauth/callback
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: weather-agent
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+rules:
+# Allow reading configmaps for dynamic configuration
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+# Allow reading secrets for credentials
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+# Allow reading services for service discovery
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list"]
+# Allow reading pods for health checks
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+# Allow creating events for audit logging
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: weather-agent
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: weather-agent
+subjects:
+- kind: ServiceAccount
+  name: weather-agent
+---
+# ClusterRole for OAuth authentication
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: weather-agent-oauth
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+rules:
+# Allow token review for OAuth validation
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+# Allow subject access review for authorization
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+# Allow reading user information
+- apiGroups: ["user.openshift.io"]
+  resources: ["users"]
+  verbs: ["get", "list"]
+  resourceNames: ["~"]
+# Allow reading OAuth clients
+- apiGroups: ["oauth.openshift.io"]
+  resources: ["oauthclients"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: weather-agent-oauth
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: weather-agent-oauth
+subjects:
+- kind: ServiceAccount
+  name: weather-agent

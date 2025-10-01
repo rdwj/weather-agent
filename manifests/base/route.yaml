@@ -1,0 +1,27 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: weather-agent
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+  annotations:
+    haproxy.router.openshift.io/timeout: 30s
+    haproxy.router.openshift.io/rate-limit-connections: "true"
+    haproxy.router.openshift.io/rate-limit-connections.concurrent-tcp: "100"
+    haproxy.router.openshift.io/rate-limit-connections.rate-tcp: "1000"
+spec:
+  host: weather-agent.apps.openshift.local
+  path: /
+  to:
+    kind: Service
+    name: weather-agent
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-ui
+  namespace: weather-agent
+  labels:
+    app: weather-system
+    component: ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-system
+      component: ui
+  template:
+    metadata:
+      labels:
+        app: weather-system
+        component: ui
+    spec:
+      containers:
+      - name: chat-ui
+        image: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent-ui:v2
+        ports:
+        - containerPort: 8501
+          protocol: TCP
+        env:
+        - name: API_URL
+          value: "http://weather-agent:8000"
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-ui
+  namespace: weather-agent
+  labels:
+    app: weather-system
+    component: ui
+spec:
+  selector:
+    app: weather-system
+    component: ui
+  ports:
+  - name: http
+    port: 8501
+    targetPort: 8501
+    protocol: TCP
+  type: ClusterIP

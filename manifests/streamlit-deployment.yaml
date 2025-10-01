@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-agent-ui
+  namespace: weather-agent
+  labels:
+    app: weather-system
+    component: ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-system
+      component: ui
+  template:
+    metadata:
+      labels:
+        app: weather-system
+        component: ui
+    spec:
+      containers:
+      - name: streamlit-ui
+        image: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent:latest
+        command: ["streamlit"]
+        args: ["run", "/opt/app-root/src/streamlit_app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+        ports:
+        - containerPort: 8501
+          protocol: TCP
+        env:
+        - name: API_URL
+          value: "http://weather-agent:8000"
+        - name: ENV
+          value: "development"
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8501
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-agent-ui
+  namespace: weather-agent
+  labels:
+    app: weather-system
+    component: ui
+spec:
+  selector:
+    app: weather-system
+    component: ui
+  ports:
+  - name: http
+    port: 8501
+    targetPort: 8501
+    protocol: TCP
+  type: ClusterIP

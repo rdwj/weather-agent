@@ -1,0 +1,45 @@
+# Production Containerfile for Weather Agent
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Switch to root for package installation
+USER 0
+
+# Copy requirements first for better caching
+COPY requirements.txt /tmp/requirements.txt
+
+# Install dependencies
+RUN pip install --upgrade pip && \
+    pip install -r /tmp/requirements.txt && \
+    # Install additional production dependencies
+    pip install redis uvloop httptools && \
+    # Clean up
+    rm -rf /tmp/* /var/cache/yum
+
+# Create app directory
+WORKDIR /app
+
+# Copy application code
+COPY src/ ./src/
+COPY ui/ ./ui/
+COPY prompts/ ./prompts/
+
+# Create necessary directories and set permissions
+RUN mkdir -p /tmp/claude /app/logs && \
+    chown -R 1001:0 /app && \
+    chmod -R g=u /app && \
+    chmod -R 777 /tmp/claude /app/logs
+
+# Switch back to non-root user
+USER 1001
+
+# Expose ports
+EXPOSE 8000 8501
+
+# Default command (can be overridden)
+CMD ["python", "-m", "uvicorn", "src.api.weather_api:app", "--host", "0.0.0.0", "--port", "8000"]

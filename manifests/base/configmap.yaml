@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: weather-agent-config
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: weather-system
+data:
+  # Application Configuration
+  APP_NAME: weather-agent
+  APP_VERSION: "1.0.0"
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+  LOG_FORMAT: json
+
+  # Server Configuration
+  SERVER_HOST: "0.0.0.0"
+  SERVER_PORT: "8000"
+  SERVER_WORKERS: "4"
+  SERVER_RELOAD: "false"
+
+  # Redis Configuration
+  REDIS_URL: redis://redis:6379
+  REDIS_MAX_CONNECTIONS: "50"
+  REDIS_DECODE_RESPONSES: "true"
+  REDIS_SOCKET_KEEPALIVE: "true"
+  REDIS_SOCKET_CONNECT_TIMEOUT: "5"
+
+  # Cache Configuration
+  CACHE_TTL_SECONDS: "900"  # 15 minutes
+  SESSION_TTL_SECONDS: "1800"  # 30 minutes
+
+  # Rate Limiting
+  RATE_LIMIT_GLOBAL_PER_MINUTE: "1000"
+  RATE_LIMIT_USER_PER_MINUTE: "100"
+  RATE_LIMIT_BURST_SIZE: "10"
+
+  # MCP Configuration
+  MCP_SERVER_URL: https://mcp-server-weather-mcp-3.apps.cluster-nl55d.nl55d.sandbox1207.opentlc.com
+  MCP_TRANSPORT: http
+  MCP_CONNECTION_TIMEOUT: "30"
+  MCP_REQUEST_TIMEOUT: "10"
+  MCP_MAX_RETRIES: "3"
+
+  # OpenTelemetry Configuration
+  OTEL_SERVICE_NAME: weather-agent
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  OTEL_PROPAGATORS: tracecontext,baggage
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=weather-system,deployment.environment=production"
+
+  # LangChain Configuration
+  LANGCHAIN_API_KEY: ""  # Set via secret if needed
+  LANGCHAIN_TRACING_V2: "true"
+  LANGCHAIN_PROJECT: weather-agent
+
+  # Security Configuration
+  CORS_ALLOWED_ORIGINS: "*"
+  CORS_ALLOW_CREDENTIALS: "false"
+  CORS_ALLOWED_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  CORS_ALLOWED_HEADERS: "Content-Type,Authorization,X-Request-ID,X-Correlation-ID"
+
+  # OAuth2/OIDC Configuration (disabled for demo)
+  OAUTH2_ENABLED: "false"
+  OAUTH2_ISSUER_URL: ""
+  OAUTH2_TOKEN_URL: ""
+  OAUTH2_USERINFO_URL: ""
+  OAUTH2_JWKS_URI: ""
+
+  # Performance Configuration
+  REQUEST_TIMEOUT_SECONDS: "30"
+  RESPONSE_TIME_TARGET_MS: "2000"
+  MAX_CONCURRENT_REQUESTS: "100"
+  CONNECTION_POOL_SIZE: "20"
+
+  # Feature Flags (demo mode)
+  FEATURE_CACHE_ENABLED: "true"
+  FEATURE_RATE_LIMITING_ENABLED: "false"
+  FEATURE_ALERTS_ENABLED: "true"
+  FEATURE_SESSION_PERSISTENCE: "true"
+  DEMO_MODE: "true"

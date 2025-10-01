@@ -1,0 +1,14 @@
+spec:
+  template:
+    spec:
+      containers:
+      - name: weather-agent
+        envFrom:
+        - secretRef:
+            name: weather-agent-secrets
+        env:
+        # Override any specific environment variables if needed
+        - name: REDIS_URL
+          value: "redis://redis:6379"
+        - name: MCP_URL
+          value: "https://mcp-server-weather-mcp-3.apps.cluster-nl55d.nl55d.sandbox1207.opentlc.com"

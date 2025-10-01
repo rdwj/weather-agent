@@ -1,0 +1,155 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-agent-ui
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: ui
+    app.kubernetes.io/part-of: weather-agent
+    app.openshift.io/runtime: python
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-agent
+      component: ui
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: weather-agent
+        component: ui
+        app.kubernetes.io/name: weather-agent
+        app.kubernetes.io/component: ui
+    spec:
+      containers:
+      - name: weather-agent-ui
+        image: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent-ui:latest
+        ports:
+        - containerPort: 8501
+          name: http
+          protocol: TCP
+        env:
+        # API URL - point to internal service
+        - name: WEATHER_API_URL
+          value: "http://weather-agent-api:8000"
+        # Streamlit Configuration
+        - name: STREAMLIT_SERVER_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: STREAMLIT_SERVER_PORT
+        - name: STREAMLIT_SERVER_ADDRESS
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: STREAMLIT_SERVER_ADDRESS
+        - name: STREAMLIT_SERVER_HEADLESS
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: STREAMLIT_SERVER_HEADLESS
+        - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        - name: STREAMLIT_SERVER_ENABLE_CORS
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: STREAMLIT_SERVER_ENABLE_CORS
+        - name: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+          valueFrom:
+            configMapKeyRef:
+              name: weather-agent-config
+              key: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        command:
+        - streamlit
+        - run
+        - ui/weather_chat.py
+        - --server.port=8501
+        - --server.address=0.0.0.0
+        - --server.headless=true
+        - --browser.gatherUsageStats=false
+        - --theme.primaryColor=#6366f1
+        - --theme.backgroundColor=#ffffff
+        - --theme.secondaryBackgroundColor=#f7f7f7
+        - --theme.textColor=#333333
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: streamlit-cache
+          mountPath: /.streamlit
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: streamlit-cache
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-agent-ui
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: ui
+spec:
+  selector:
+    app: weather-agent
+    component: ui
+  ports:
+  - name: http
+    port: 8501
+    targetPort: 8501
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: weather-agent-ui
+  labels:
+    app: weather-agent
+    app.kubernetes.io/name: weather-agent
+    app.kubernetes.io/component: ui
+  annotations:
+    haproxy.router.openshift.io/timeout: 5m
+spec:
+  to:
+    kind: Service
+    name: weather-agent-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

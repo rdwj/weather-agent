@@ -1,0 +1,439 @@
+openapi: 3.0.3
+info:
+  title: Weather Agent API
+  description: Cloud-native weather agent with natural language processing
+  version: 1.0.0
+  contact:
+    name: Weather Agent Team
+
+servers:
+  - url: https://weather-agent.apps.openshift.local
+    description: Production
+  - url: http://localhost:8000
+    description: Development
+
+security:
+  - OAuth2: []
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      tags:
+        - System
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /ready:
+    get:
+      summary: Readiness check endpoint
+      tags:
+        - System
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+        '503':
+          description: Service not ready
+
+  /api/v1/weather/query:
+    post:
+      summary: Process natural language weather query
+      tags:
+        - Weather
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WeatherQueryRequest'
+      responses:
+        '200':
+          description: Weather information retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeatherQueryResponse'
+        '400':
+          description: Invalid query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitResponse'
+        '503':
+          description: Weather service unavailable
+
+  /api/v1/weather/alerts:
+    get:
+      summary: Get weather alerts for monitored locations
+      tags:
+        - Weather
+      responses:
+        '200':
+          description: Weather alerts retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeatherAlertsResponse'
+
+  /api/v1/session:
+    get:
+      summary: Get current session information
+      tags:
+        - Session
+      responses:
+        '200':
+          description: Session information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+
+  /api/v1/session/locations:
+    get:
+      summary: Get monitored locations
+      tags:
+        - Session
+      responses:
+        '200':
+          description: List of monitored locations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredLocations'
+
+    put:
+      summary: Update monitored locations
+      tags:
+        - Session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLocationsRequest'
+      responses:
+        '200':
+          description: Locations updated successfully
+        '400':
+          description: Invalid request (e.g., more than 3 locations)
+
+  /api/v1/session/preferences:
+    get:
+      summary: Get user preferences
+      tags:
+        - Session
+      responses:
+        '200':
+          description: User preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+
+    patch:
+      summary: Update user preferences
+      tags:
+        - Session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPreferences'
+      responses:
+        '200':
+          description: Preferences updated successfully
+
+  /api/v1/metrics:
+    get:
+      summary: Get usage metrics
+      tags:
+        - Metrics
+      parameters:
+        - name: start_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Usage metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageMetrics'
+
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://oauth.openshift.local/authorize
+          tokenUrl: https://oauth.openshift.local/token
+          scopes:
+            read: Read weather data
+            write: Update preferences
+
+  schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+        version:
+          type: string
+        mcp_server_connected:
+          type: boolean
+        redis_connected:
+          type: boolean
+
+    WeatherQueryRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          maxLength: 500
+          example: "What's the weather like in New York?"
+        session_id:
+          type: string
+          format: uuid
+
+    WeatherQueryResponse:
+      type: object
+      required:
+        - query_id
+        - response
+        - data_freshness
+      properties:
+        query_id:
+          type: string
+          format: uuid
+        response:
+          type: string
+          description: Natural language response
+        weather_data:
+          type: object
+          properties:
+            location:
+              $ref: '#/components/schemas/Location'
+            current:
+              $ref: '#/components/schemas/CurrentWeather'
+            forecast:
+              type: array
+              items:
+                $ref: '#/components/schemas/ForecastDay'
+        data_freshness:
+          type: string
+          format: date-time
+        cache_hit:
+          type: boolean
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WeatherAlert'
+
+    CurrentWeather:
+      type: object
+      properties:
+        temperature:
+          type: number
+        temperature_unit:
+          type: string
+          enum: [Celsius, Fahrenheit]
+        conditions:
+          type: string
+        humidity:
+          type: number
+        wind_speed:
+          type: number
+        wind_direction:
+          type: string
+
+    ForecastDay:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        high_temp:
+          type: number
+        low_temp:
+          type: number
+        conditions:
+          type: string
+        precipitation_chance:
+          type: number
+
+    Location:
+      type: object
+      required:
+        - display_name
+      properties:
+        display_name:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        city:
+          type: string
+        country:
+          type: string
+
+    WeatherAlert:
+      type: object
+      required:
+        - severity
+        - headline
+      properties:
+        id:
+          type: string
+        severity:
+          type: string
+          enum: [Moderate, Severe, Extreme]
+        headline:
+          type: string
+        description:
+          type: string
+        effective_from:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    WeatherAlertsResponse:
+      type: object
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WeatherAlert'
+        locations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Location'
+
+    SessionInfo:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        conversation_count:
+          type: integer
+
+    MonitoredLocations:
+      type: object
+      properties:
+        locations:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/Location'
+
+    UpdateLocationsRequest:
+      type: object
+      required:
+        - locations
+      properties:
+        locations:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/Location'
+
+    UserPreferences:
+      type: object
+      properties:
+        temperature_unit:
+          type: string
+          enum: [Celsius, Fahrenheit]
+          default: Fahrenheit
+        default_location:
+          $ref: '#/components/schemas/Location'
+
+    UsageMetrics:
+      type: object
+      properties:
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        total_requests:
+          type: integer
+        cache_hit_rate:
+          type: number
+        avg_response_time_ms:
+          type: number
+        p95_response_time_ms:
+          type: number
+        error_rate:
+          type: number
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+    RateLimitResponse:
+      type: object
+      required:
+        - error
+        - retry_after
+      properties:
+        error:
+          type: string
+          default: "Rate limit exceeded"
+        retry_after:
+          type: integer
+          description: Seconds until next request allowed
+        limit:
+          type: integer
+        remaining:
+          type: integer
