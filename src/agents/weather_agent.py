@@ -642,3 +642,13 @@ class WeatherAgent(BaseAgent):
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         return self._cache.get_stats()
+
+    async def close(self):
+        """
+        Close the agent and disconnect from MCP server.
+
+        This is called during application shutdown to cleanly disconnect
+        from the MCP server and release resources.
+        """
+        await self.disconnect_mcp()
+        logger.info("Weather agent closed")

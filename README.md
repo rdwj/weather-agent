@@ -104,7 +104,7 @@ sudo systemctl start redis
 4. **Start the API server**
 
 ```bash
-uvicorn src.main:app --reload --port 8000
+uvicorn src.api.weather_api:app --reload --port 8000
 ```
 
 5. **Launch the UI**
@@ -267,7 +267,7 @@ python demo.py
 
 ### UI Testing
 
-1. Start API server: `uvicorn src.main:app --reload`
+1. Start API server: `uvicorn src.api.weather_api:app --reload --port 8000`
 2. Start Redis: `redis-server`
 3. Launch Streamlit: `streamlit run ui/weather_chat.py`
 4. Click "Run Preflight Checks"

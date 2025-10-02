@@ -27,7 +27,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Run development server
-uvicorn src.main:app --reload --port 8000
+uvicorn src.api.weather_api:app --reload --port 8000
 
 # Run tests
 pytest tests/
