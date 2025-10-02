@@ -690,10 +690,17 @@ def main():
                                 st.divider()
             elif "data" in response:
                 # Direct weather data response
-                weather = response["data"]
-                assistant_message = f"Here's the weather for **{weather.get('location', 'your location')}**:"
-                st.markdown(assistant_message)
-                display_weather_data(response)
+                # Check if we have a narrative (formatted text) first
+                if "narrative" in response:
+                    # Display the narrative instead of raw data
+                    assistant_message = response["narrative"]
+                    st.markdown(assistant_message)
+                else:
+                    # Fallback to old display if no narrative
+                    weather = response["data"]
+                    assistant_message = f"Here's the weather for **{weather.get('location', 'your location')}**:"
+                    st.markdown(assistant_message)
+                    display_weather_data(response)
 
 
             elif "response" in response:

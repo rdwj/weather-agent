@@ -40,10 +40,20 @@ class WeatherAgent(BaseAgent):
         super().__init__(
             name="WeatherAgent",
             description="Intelligent weather assistant with real-time data and analysis",
-            system_prompt="""You are an expert meteorologist assistant. Provide accurate,
-            helpful weather information and analysis. Be concise but thorough.
-            Always mention any weather concerns or safety considerations.""",
-            temperature=0.6,  # Balanced for factual accuracy with some creativity
+            system_prompt="""You are a friendly weather assistant helping people understand the weather.
+
+            IMPORTANT: Always respond in natural, conversational language. Write in flowing paragraphs.
+            NEVER use JSON format, code blocks, or structured data in your responses.
+
+            When providing weather information:
+            - Write like you're talking to a friend
+            - Use plain English paragraphs
+            - Be warm and helpful
+            - Include practical advice when relevant
+            - Mention any safety concerns
+
+            Keep responses concise but complete - aim for 2-3 short paragraphs.""",
+            temperature=0.7,  # Slightly higher for more natural language
             mcp_config=mcp_config
         )
 
@@ -111,9 +121,12 @@ class WeatherAgent(BaseAgent):
             cached_data = await self._cache.get(cache_key)
             if cached_data:
                 logger.debug(f"Using cached weather for {location}")
+                # Generate narrative for cached data too
+                narrative = self._format_weather_narrative(cached_data)
                 return {
                     "success": True,
                     "data": cached_data,
+                    "narrative": narrative,
                     "cached": True,
                     "cached_at": cached_data.get("_cached_at", datetime.utcnow().isoformat())
                 }
@@ -129,9 +142,13 @@ class WeatherAgent(BaseAgent):
                 # Cache the result
                 await self._cache.set(cache_key, result["data"])
 
+                # Generate a formatted narrative for the response
+                narrative = self._format_weather_narrative(result["data"])
+
                 return {
                     "success": True,
                     "data": result["data"],
+                    "narrative": narrative,
                     "cached": False
                 }
             else:
@@ -187,10 +204,11 @@ class WeatherAgent(BaseAgent):
             if weather_result["success"]:
                 # Cache the result
                 cache_key = self._get_cache_key(location)
-                self._weather_cache[cache_key] = {
-                    "data": weather_result["data"],
-                    "cached_at": datetime.utcnow()
-                }
+                await self._cache.set(cache_key, weather_result["data"])
+
+                # Generate narrative
+                narrative = self._format_weather_narrative(weather_result["data"])
+                weather_result["narrative"] = narrative
 
             return weather_result
 
@@ -208,7 +226,7 @@ class WeatherAgent(BaseAgent):
         analysis_type: str = "general"
     ) -> Dict[str, Any]:
         """
-        Analyze weather data using LLM.
+        Analyze weather data using LLM or formatted narrative.
 
         Args:
             weather_data: Weather data to analyze
@@ -218,9 +236,13 @@ class WeatherAgent(BaseAgent):
             Analysis results
         """
         if not self.llm_client.is_available():
+            # Use simple formatted narrative when LLM not available
+            narrative = self._format_weather_narrative(weather_data)
             return {
-                "success": False,
-                "error": "LLM not configured for analysis"
+                "success": True,
+                "analysis": narrative,
+                "type": analysis_type,
+                "prompt_used": "fallback"
             }
 
         try:
@@ -280,6 +302,35 @@ class WeatherAgent(BaseAgent):
                 "error": str(e)
             }
 
+    def _format_weather_narrative(self, weather_data: Dict[str, Any]) -> str:
+        """
+        Format weather data as a nice narrative when LLM is not available.
+
+        Args:
+            weather_data: Weather data dictionary
+
+        Returns:
+            Formatted narrative string
+        """
+        location = weather_data.get("location", "the requested location")
+        temp = weather_data.get("temperature", "N/A")
+        conditions = weather_data.get("conditions", "N/A")
+        humidity = weather_data.get("humidity", "N/A")
+        wind = weather_data.get("wind", "N/A")
+        forecast = weather_data.get("forecast", "")
+
+        # Build narrative
+        narrative = f"Here's the current weather for **{location}**:\n\n"
+        narrative += f"🌡️ **Temperature:** {temp}\n"
+        narrative += f"☁️ **Conditions:** {conditions}\n"
+        narrative += f"💧 **Humidity:** {humidity}\n"
+        narrative += f"💨 **Wind:** {wind}\n"
+
+        if forecast and forecast != "N/A":
+            narrative += f"\n📅 **Forecast:**\n{forecast}"
+
+        return narrative
+
     async def _analyze_with_custom_prompt(
         self,
         weather_data: Dict[str, Any],
@@ -290,44 +341,59 @@ class WeatherAgent(BaseAgent):
         """
         prompts = {
             "general": f"""
-                Analyze this weather data and provide a comprehensive report:
+                You are writing a weather report for a friend. Based on this weather data:
                 {json.dumps(weather_data, indent=2)}
 
-                Include:
-                1. Current conditions summary
-                2. Key weather metrics
-                3. Forecast highlights
-                4. Any concerns or recommendations
+                CRITICAL INSTRUCTIONS:
+                - Write in PLAIN TEXT paragraphs - NO JSON, NO code blocks, NO structured data
+                - Start directly with the weather report - don't write "Here's the report:" or similar
+                - Use natural, conversational language like you're texting a friend
+                - Keep it concise - 2-3 short paragraphs at most
+
+                Write something like:
+                "It's currently [temperature] and [conditions] in [location]. [Add context about how it feels]
+
+                Looking at the forecast, [brief forecast summary]. [Add practical tip about clothing or activities].
+
+                [Any additional helpful note about the weather]"
+
+                Remember: Write as flowing text, not structured data. Be conversational and helpful.
             """,
             "safety": f"""
-                Analyze this weather data for safety concerns:
+                Analyze this weather data for safety concerns and write a clear report:
                 {json.dumps(weather_data, indent=2)}
 
                 Focus on:
-                1. Any dangerous conditions
-                2. Health impacts
-                3. Travel safety
-                4. Recommended precautions
+                1. Any dangerous conditions (extreme temps, severe weather, etc.)
+                2. Health and safety impacts
+                3. Travel safety considerations
+                4. Specific, actionable precautions to take
+
+                Be clear and direct about any risks. Use proper formatting with line breaks.
             """,
             "activity": f"""
-                Based on this weather data, provide activity recommendations:
+                Based on this weather data, provide helpful activity recommendations:
                 {json.dumps(weather_data, indent=2)}
 
-                Suggest:
-                1. Outdoor activities suitability
-                2. Best times for activities
-                3. Clothing recommendations
-                4. Things to avoid
+                Include:
+                1. How suitable the weather is for outdoor activities
+                2. Best times for specific activities
+                3. What to wear or bring
+                4. Any activities to avoid
+
+                Be conversational and helpful. Format nicely with line breaks.
             """,
             "travel": f"""
-                Analyze this weather for travel planning:
+                Analyze this weather for travel planning and write a helpful report:
                 {json.dumps(weather_data, indent=2)}
 
-                Address:
-                1. Driving conditions
-                2. Flight impact potential
-                3. Visibility concerns
-                4. Best travel times
+                Cover:
+                1. Driving conditions and visibility
+                2. Potential impacts on flights or other travel
+                3. Best times to travel
+                4. What travelers should prepare for
+
+                Be practical and specific. Use proper formatting.
             """
         }
 
