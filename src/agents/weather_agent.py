@@ -14,6 +14,7 @@ import asyncio
 
 from ..core.base_agent import BaseAgent, MCPConfig
 from ..utilities.cache_manager import cache_manager
+from ..utilities.prompt_loader import get_prompt_loader
 
 logger = logging.getLogger(__name__)
 
@@ -37,22 +38,16 @@ class WeatherAgent(BaseAgent):
             # Will use MCP_URL from environment if not provided
             mcp_config = None
 
+        # Initialize prompt loader
+        self._prompt_loader = get_prompt_loader()
+
+        # Load system prompt from YAML
+        system_prompt = self._prompt_loader.load_prompt("system_prompt")
+
         super().__init__(
             name="WeatherAgent",
             description="Intelligent weather assistant with real-time data and analysis",
-            system_prompt="""You are a friendly weather assistant helping people understand the weather.
-
-            IMPORTANT: Always respond in natural, conversational language. Write in flowing paragraphs.
-            NEVER use JSON format, code blocks, or structured data in your responses.
-
-            When providing weather information:
-            - Write like you're talking to a friend
-            - Use plain English paragraphs
-            - Be warm and helpful
-            - Include practical advice when relevant
-            - Mention any safety concerns
-
-            Keep responses concise but complete - aim for 2-3 short paragraphs.""",
+            system_prompt=system_prompt,
             temperature=0.7,  # Slightly higher for more natural language
             mcp_config=mcp_config
         )
@@ -339,73 +334,41 @@ class WeatherAgent(BaseAgent):
         """
         Analyze weather with custom prompt when MCP prompts unavailable.
         """
-        prompts = {
-            "general": f"""
-                You are writing a weather report for a friend. Based on this weather data:
-                {json.dumps(weather_data, indent=2)}
-
-                CRITICAL INSTRUCTIONS:
-                - Write in PLAIN TEXT paragraphs - NO JSON, NO code blocks, NO structured data
-                - Start directly with the weather report - don't write "Here's the report:" or similar
-                - Use natural, conversational language like you're texting a friend
-                - Keep it concise - 2-3 short paragraphs at most
-
-                Write something like:
-                "It's currently [temperature] and [conditions] in [location]. [Add context about how it feels]
-
-                Looking at the forecast, [brief forecast summary]. [Add practical tip about clothing or activities].
-
-                [Any additional helpful note about the weather]"
-
-                Remember: Write as flowing text, not structured data. Be conversational and helpful.
-            """,
-            "safety": f"""
-                Analyze this weather data for safety concerns and write a clear report:
-                {json.dumps(weather_data, indent=2)}
-
-                Focus on:
-                1. Any dangerous conditions (extreme temps, severe weather, etc.)
-                2. Health and safety impacts
-                3. Travel safety considerations
-                4. Specific, actionable precautions to take
-
-                Be clear and direct about any risks. Use proper formatting with line breaks.
-            """,
-            "activity": f"""
-                Based on this weather data, provide helpful activity recommendations:
-                {json.dumps(weather_data, indent=2)}
-
-                Include:
-                1. How suitable the weather is for outdoor activities
-                2. Best times for specific activities
-                3. What to wear or bring
-                4. Any activities to avoid
-
-                Be conversational and helpful. Format nicely with line breaks.
-            """,
-            "travel": f"""
-                Analyze this weather for travel planning and write a helpful report:
-                {json.dumps(weather_data, indent=2)}
-
-                Cover:
-                1. Driving conditions and visibility
-                2. Potential impacts on flights or other travel
-                3. Best times to travel
-                4. What travelers should prepare for
-
-                Be practical and specific. Use proper formatting.
-            """
+        # Map analysis types to prompt files
+        prompt_map = {
+            "general": "general_analysis",
+            "safety": "safety_analysis",
+            "activity": "activity_analysis",
+            "travel": "travel_analysis"
         }
 
-        prompt = prompts.get(analysis_type, prompts["general"])
+        # Get the appropriate prompt name
+        prompt_name = prompt_map.get(analysis_type, "general_analysis")
 
+        # Load prompt with weather data substitution
+        try:
+            prompt = self._prompt_loader.load_prompt(
+                prompt_name,
+                {"weather_data": json.dumps(weather_data, indent=2)}
+            )
+        except (FileNotFoundError, KeyError) as e:
+            logger.error(f"Error loading prompt '{prompt_name}': {e}")
+            # Fallback to simple narrative
+            return {
+                "success": True,
+                "analysis": self._format_weather_narrative(weather_data),
+                "type": analysis_type,
+                "prompt_used": "fallback"
+            }
+
+        # Get LLM analysis
         analysis = await self.call_llm(prompt=prompt, temperature=0.7)
 
         return {
             "success": True,
             "analysis": analysis,
             "type": analysis_type,
-            "prompt_used": "custom"
+            "prompt_used": prompt_name
         }
 
     async def compare_locations(
@@ -455,17 +418,25 @@ class WeatherAgent(BaseAgent):
 
             # Analyze comparison
             if self.llm_client.is_available():
-                comparison_prompt = f"""
-                    Compare the weather conditions between these locations:
-                    {json.dumps(weather_data, indent=2)}
+                # Load comparison prompt from YAML
+                try:
+                    comparison_prompt = self._prompt_loader.load_prompt(
+                        "location_comparison",
+                        {"weather_data": json.dumps(weather_data, indent=2)}
+                    )
+                except (FileNotFoundError, KeyError) as e:
+                    logger.warning(f"Error loading comparison prompt: {e}, using fallback")
+                    comparison_prompt = f"""
+                        Compare the weather conditions between these locations:
+                        {json.dumps(weather_data, indent=2)}
 
-                    Provide:
-                    1. Temperature comparison
-                    2. Condition differences
-                    3. Best/worst weather location
-                    4. Key differences to note
-                    5. Recommendations for each location
-                """
+                        Provide:
+                        1. Temperature comparison
+                        2. Condition differences
+                        3. Best/worst weather location
+                        4. Key differences to note
+                        5. Recommendations for each location
+                    """
 
                 comparison = await self.call_llm(
                     prompt=comparison_prompt,
@@ -536,17 +507,28 @@ class WeatherAgent(BaseAgent):
 
         # Add LLM interpretation if available
         if self.llm_client.is_available():
-            forecast_prompt = f"""
-                Based on this weather data, provide a {days}-day forecast outlook:
-                {json.dumps(weather_data, indent=2)}
+            # Load forecast prompt from YAML
+            try:
+                forecast_prompt = self._prompt_loader.load_prompt(
+                    "forecast_analysis",
+                    {
+                        "weather_data": json.dumps(weather_data, indent=2),
+                        "days": str(days)
+                    }
+                )
+            except (FileNotFoundError, KeyError) as e:
+                logger.warning(f"Error loading forecast prompt: {e}, using fallback")
+                forecast_prompt = f"""
+                    Based on this weather data, provide a {days}-day forecast outlook:
+                    {json.dumps(weather_data, indent=2)}
 
-                Include:
-                1. Daily temperature trends
-                2. Expected conditions
-                3. Precipitation likelihood
-                4. Weekend weather if applicable
-                5. Planning recommendations
-            """
+                    Include:
+                    1. Daily temperature trends
+                    2. Expected conditions
+                    3. Precipitation likelihood
+                    4. Weekend weather if applicable
+                    5. Planning recommendations
+                """
 
             forecast_analysis = await self.call_llm(
                 prompt=forecast_prompt,

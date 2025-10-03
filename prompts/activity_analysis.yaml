@@ -1,0 +1,23 @@
+name: "Activity Weather Analysis"
+description: "Prompt for providing activity recommendations based on weather"
+template: |
+  Based on this weather data, provide helpful activity recommendations:
+  {weather_data}
+
+  Include:
+  1. How suitable the weather is for outdoor activities
+  2. Best times for specific activities
+  3. What to wear or bring
+  4. Any activities to avoid
+
+  Be conversational and helpful. Format nicely with line breaks.
+
+parameters:
+  temperature: 0.7
+  max_tokens: 1500
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON-formatted weather data to analyze for activities"
+    required: true

@@ -1,0 +1,26 @@
+name: "Forecast Analysis"
+description: "Prompt for analyzing and presenting extended weather forecasts"
+template: |
+  Based on this weather data, provide a {days}-day forecast outlook:
+  {weather_data}
+
+  Include:
+  1. Daily temperature trends
+  2. Expected conditions
+  3. Precipitation likelihood
+  4. Weekend weather if applicable
+  5. Planning recommendations
+
+parameters:
+  temperature: 0.6
+  max_tokens: 2000
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON-formatted weather data including forecast information"
+    required: true
+  - name: "days"
+    type: "integer"
+    description: "Number of days to forecast"
+    required: true

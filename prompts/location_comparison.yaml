@@ -1,0 +1,22 @@
+name: "Location Comparison Analysis"
+description: "Prompt for comparing weather between multiple locations"
+template: |
+  Compare the weather conditions between these locations:
+  {weather_data}
+
+  Provide:
+  1. Temperature comparison
+  2. Condition differences
+  3. Best/worst weather location
+  4. Key differences to note
+  5. Recommendations for each location
+
+parameters:
+  temperature: 0.6
+  max_tokens: 2000
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON-formatted weather data for multiple locations to compare"
+    required: true

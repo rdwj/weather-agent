@@ -1,0 +1,30 @@
+name: "General Weather Analysis"
+description: "Prompt for providing a friendly general weather report"
+template: |
+  You are writing a weather report for a friend. Based on this weather data:
+  {weather_data}
+
+  CRITICAL INSTRUCTIONS:
+  - Write in PLAIN TEXT paragraphs - NO JSON, NO code blocks, NO structured data
+  - Start directly with the weather report - don't write "Here's the report:" or similar
+  - Use natural, conversational language like you're texting a friend
+  - Keep it concise - 2-3 short paragraphs at most
+
+  Write something like:
+  "It's currently [temperature] and [conditions] in [location]. [Add context about how it feels]
+
+  Looking at the forecast, [brief forecast summary]. [Add practical tip about clothing or activities].
+
+  [Any additional helpful note about the weather]"
+
+  Remember: Write as flowing text, not structured data. Be conversational and helpful.
+
+parameters:
+  temperature: 0.7
+  max_tokens: 1500
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON-formatted weather data to analyze"
+    required: true
