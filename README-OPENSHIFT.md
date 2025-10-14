@@ -161,14 +161,192 @@ oc get routes -n weather-agent
 
 ## Available Scripts
 
-### `scripts/deploy-openshift.sh`
-Full deployment script with interactive prompts. Handles everything from namespace creation to health checks.
+### `./scripts/deploy-openshift.sh`
+**Purpose:** Full deployment to OpenShift
 
-### `scripts/apply-secret.sh`
-Updates secrets from `.env` file and restarts deployments. Use this when you need to update credentials.
+**What it does:**
+- Creates namespace if it doesn't exist
+- Applies all manifests (deployments, services, routes, etc.)
+- Creates BuildConfig and builds container image
+- Applies secrets from `.env` file
+- Sets up everything from scratch
+- Verifies deployment health
 
-### `scripts/rebuild-openshift.sh`
-Quick rebuild for code changes. Rebuilds images and redeploys without recreating the entire infrastructure.
+**When to use:**
+- ✅ First time deploying the project
+- ✅ You've made changes to manifests (YAML files in `manifests/`)
+- ✅ You want to ensure everything is properly configured
+- ✅ Something is broken and you want to start fresh
+- ✅ Setting up a new environment (dev/staging/prod)
+
+**Example:**
+```bash
+./scripts/deploy-openshift.sh
+```
+
+### `./scripts/rebuild-openshift.sh`
+**Purpose:** Quick rebuild for code changes
+
+**What it does:**
+- Deletes existing BuildConfig and ImageStream
+- Creates new BuildConfig
+- Triggers a fresh build from local code
+- **Note:** Does NOT restart deployments automatically
+
+**When to use:**
+- ✅ You modified Python code (src/, agents/, ui/, etc.)
+- ✅ You updated application logic
+- ✅ You want the latest code deployed without touching infrastructure
+- ❌ Don't use if you only changed environment variables (use `apply-secret.sh` instead)
+
+**Important:** After running this script, you must restart the deployments:
+```bash
+./scripts/rebuild-openshift.sh
+
+# Then restart deployments
+oc rollout restart deployment weather-agent-api -n weather-agent
+oc rollout restart deployment weather-agent-ui -n weather-agent
+
+# Wait for rollout to complete
+oc rollout status deployment weather-agent-api -n weather-agent
+oc rollout status deployment weather-agent-ui -n weather-agent
+```
+
+### `./scripts/apply-secret.sh`
+**Purpose:** Update secrets/environment variables only
+
+**What it does:**
+- Reads configuration from `.env` file
+- Updates the `weather-agent-secret` in OpenShift
+- Automatically restarts both API and UI deployments
+- No code rebuild
+
+**When to use:**
+- ✅ You changed API keys (LLM_API_KEY, etc.)
+- ✅ You updated MCP_URL
+- ✅ You modified any environment variables in `.env`
+- ✅ Rotating credentials
+- ❌ Don't use if you also changed code (you'll need to rebuild)
+
+**Example:**
+```bash
+# Edit your .env file
+vim .env
+
+# Apply the changes
+./scripts/apply-secret.sh
+```
+
+### `./scripts/verify-deployment.sh`
+**Purpose:** Verify deployment health and status
+
+**What it does:**
+- Checks namespace existence
+- Verifies all pods are running
+- Tests API health endpoint
+- Shows routes and URLs
+- Displays pod status and resource usage
+
+**When to use:**
+- ✅ After running any deployment script
+- ✅ Troubleshooting deployment issues
+- ✅ Verifying system is healthy
+- ✅ Getting route URLs
+- ✅ Checking pod status
+
+**Example:**
+```bash
+./scripts/verify-deployment.sh
+```
+
+## Common Workflows
+
+### Workflow 1: Code Changes Only
+
+When you've modified Python code, UI code, or application logic:
+
+```bash
+# Step 1: Rebuild the container with new code
+./scripts/rebuild-openshift.sh
+
+# Step 2: Restart API deployment
+oc rollout restart deployment weather-agent-api -n weather-agent
+
+# Step 3: Restart UI deployment
+oc rollout restart deployment weather-agent-ui -n weather-agent
+
+# Step 4: Wait for rollout to complete
+oc rollout status deployment weather-agent-api -n weather-agent
+oc rollout status deployment weather-agent-ui -n weather-agent
+
+# Step 5: Verify deployment
+./scripts/verify-deployment.sh
+```
+
+### Workflow 2: Environment Variable Changes Only
+
+When you've changed API keys, URLs, or other configuration:
+
+```bash
+# Step 1: Edit your .env file
+vim .env
+
+# Step 2: Apply secrets (restarts deployments automatically)
+./scripts/apply-secret.sh
+
+# Step 3: Verify deployment
+./scripts/verify-deployment.sh
+```
+
+### Workflow 3: Code AND Environment Changes
+
+When you've changed both code and configuration:
+
+```bash
+# Step 1: Rebuild container
+./scripts/rebuild-openshift.sh
+
+# Step 2: Apply updated secrets (restarts deployments automatically)
+./scripts/apply-secret.sh
+
+# Step 3: Verify deployment
+./scripts/verify-deployment.sh
+```
+
+### Workflow 4: Complete Redeployment
+
+When you need to deploy everything from scratch:
+
+```bash
+# Step 1: Full deployment (does everything)
+./scripts/deploy-openshift.sh
+
+# Step 2: Verify deployment (optional, deploy script does this)
+./scripts/verify-deployment.sh
+```
+
+### Workflow 5: Manifest Changes
+
+When you've modified Kubernetes manifests (YAML files):
+
+```bash
+# Apply specific manifest
+oc apply -f manifests/openshift/api/deployment.yaml -n weather-agent
+
+# Or redeploy everything
+./scripts/deploy-openshift.sh
+```
+
+## Quick Reference
+
+| Scenario | Script to Use | Additional Steps |
+|----------|--------------|------------------|
+| **First deployment** | `deploy-openshift.sh` | None |
+| **Code changes** | `rebuild-openshift.sh` | Restart deployments manually |
+| **Config changes** | `apply-secret.sh` | None (auto-restarts) |
+| **Code + Config** | `rebuild-openshift.sh` + `apply-secret.sh` | None |
+| **Manifest changes** | `deploy-openshift.sh` | None |
+| **Check health** | `verify-deployment.sh` | None |
 
 ## Troubleshooting
 
@@ -217,25 +395,15 @@ curl -k -X POST https://<api-route>/chat \
 
 ## Updating the Application
 
-### Update Code Only
+See the [Common Workflows](#common-workflows) section above for detailed instructions on:
 
-```bash
-# Make code changes, then:
-./scripts/rebuild-openshift.sh
-```
+- **Code changes only** - See Workflow 1
+- **Environment variable changes** - See Workflow 2
+- **Code AND environment changes** - See Workflow 3
+- **Full redeployment** - See Workflow 4
+- **Manifest changes** - See Workflow 5
 
-### Update Configuration
-
-```bash
-# Edit .env file, then:
-./scripts/apply-secret.sh
-```
-
-### Full Redeployment
-
-```bash
-./scripts/deploy-openshift.sh
-```
+Or reference the [Quick Reference](#quick-reference) table for a quick decision guide.
 
 ## Cleanup
 
