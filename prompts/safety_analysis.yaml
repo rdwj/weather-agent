@@ -1,0 +1,23 @@
+name: "Safety Weather Analysis"
+description: "Prompt for analyzing weather data for safety concerns"
+template: |
+  Analyze this weather data for safety concerns and write a clear report:
+  {weather_data}
+
+  Focus on:
+  1. Any dangerous conditions (extreme temps, severe weather, etc.)
+  2. Health and safety impacts
+  3. Travel safety considerations
+  4. Specific, actionable precautions to take
+
+  Be clear and direct about any risks. Use proper formatting with line breaks.
+
+parameters:
+  temperature: 0.6
+  max_tokens: 1500
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON-formatted weather data to analyze for safety"
+    required: true

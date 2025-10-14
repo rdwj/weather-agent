@@ -192,6 +192,8 @@ if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'conversation_history' not in st.session_state:
     st.session_state.conversation_history = []
+if 'thread_id' not in st.session_state:
+    st.session_state.thread_id = None
 if 'system_status' not in st.session_state:
     st.session_state.system_status = {}
 if 'llm_params' not in st.session_state:
@@ -258,10 +260,16 @@ def send_chat_message(message: str) -> Dict[str, Any]:
     if st.session_state.system_status.get("llm", False) and (is_comparison or is_weather_query):
         # Use chat endpoint for all weather queries when LLM is available
         with st.spinner("Analyzing your question..."):
-            response = call_api("/chat", "POST", {
-                "message": message,
-                "conversation_history": st.session_state.conversation_history[-10:]  # Last 10 messages
-            }, timeout=120.0)  # Increase timeout for complex queries
+            # Build request with thread_id for conversation memory
+            request_data = {"message": message}
+            if st.session_state.thread_id:
+                request_data["thread_id"] = st.session_state.thread_id
+
+            response = call_api("/chat", "POST", request_data, timeout=120.0)
+
+            # Store thread_id from response for future messages
+            if response.get("thread_id"):
+                st.session_state.thread_id = response["thread_id"]
 
         # Process the response to add tool information if available
         if response.get("success") and response.get("intent") == "comparison":
@@ -311,10 +319,16 @@ def send_chat_message(message: str) -> Dict[str, Any]:
             }
         else:
             # LLM is available but not a weather query
-            response = call_api("/chat", "POST", {
-                "message": message,
-                "conversation_history": st.session_state.conversation_history[-10:]
-            })
+            request_data = {"message": message}
+            if st.session_state.thread_id:
+                request_data["thread_id"] = st.session_state.thread_id
+
+            response = call_api("/chat", "POST", request_data)
+
+            # Store thread_id from response
+            if response.get("thread_id"):
+                st.session_state.thread_id = response["thread_id"]
+
             return response
 
 def extract_locations(text: str) -> List[str]:
@@ -495,6 +509,7 @@ def main():
             if st.button("🔄 Clear Chat", use_container_width=True):
                 st.session_state.messages = []
                 st.session_state.conversation_history = []
+                st.session_state.thread_id = None  # Clear thread to start new conversation
                 st.rerun()
 
         with col2:
@@ -599,8 +614,12 @@ def main():
             with st.spinner("Thinking..."):
                 response = send_chat_message(prompt)
 
-            # Display tool usage notifications if tools were called
-            tool_calls = response.get("tool_calls", [])
+            # Display MCP operations (tools and prompts)
+            mcp_ops = response.get("mcp_operations", {})
+            tool_calls = mcp_ops.get("tools", [])
+            prompt_calls = mcp_ops.get("prompts", [])
+
+            # Show tool usage notifications
             if tool_calls:
                 for tool_call in tool_calls:
                     tool_name = tool_call.get("tool_name", "unknown")
@@ -608,11 +627,19 @@ def main():
                     icon = "✅" if success else "❌"
 
                     # Format the tool usage message based on the tool
-                    if tool_name == "get-weather":
+                    if tool_name == "get_weather":
                         location = tool_call.get("arguments", {}).get("location", "unknown location")
                         st.info(f"🔧 Using tool: **{tool_name}** for {location} {icon}")
                     else:
                         st.info(f"🔧 Using tool: **{tool_name}** {icon}")
+
+            # Show prompt usage notifications
+            if prompt_calls:
+                for prompt_call in prompt_calls:
+                    prompt_name = prompt_call.get("prompt_name", "unknown")
+                    success = prompt_call.get("success", False)
+                    icon = "✅" if success else "❌"
+                    st.info(f"📝 Using prompt: **{prompt_name}** {icon}")
 
             if "error" in response:
                 st.error(response["error"])

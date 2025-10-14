@@ -64,16 +64,20 @@ echo -e "${BLUE}Applying secret to OpenShift...${NC}"
 if oc apply -f "${TEMP_FILE}" -n weather-agent; then
     echo -e "${GREEN}✅ Secret applied successfully!${NC}"
 
-    # Restart deployments to pick up new secret
-    echo -e "${BLUE}Restarting API deployment to pick up new secret...${NC}"
-    oc rollout restart deployment weather-agent-api -n weather-agent
+    # Restart deployments to pick up new secret (if they exist)
+    if oc get deployment weather-agent-api -n weather-agent &>/dev/null; then
+        echo -e "${BLUE}Restarting API deployment to pick up new secret...${NC}"
+        oc rollout restart deployment weather-agent-api -n weather-agent
 
-    echo -e "${YELLOW}Waiting for rollout to complete...${NC}"
-    if oc rollout status deployment weather-agent-api -n weather-agent --timeout=120s; then
-        echo -e "${GREEN}✅ API deployment restarted successfully!${NC}"
+        echo -e "${YELLOW}Waiting for rollout to complete...${NC}"
+        if oc rollout status deployment weather-agent-api -n weather-agent --timeout=120s; then
+            echo -e "${GREEN}✅ API deployment restarted successfully!${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Rollout is taking longer than expected. Check status with:${NC}"
+            echo "  oc rollout status deployment weather-agent-api -n weather-agent"
+        fi
     else
-        echo -e "${YELLOW}⚠️  Rollout is taking longer than expected. Check status with:${NC}"
-        echo "  oc rollout status deployment weather-agent-api -n weather-agent"
+        echo -e "${YELLOW}ℹ️  API deployment not found yet. Secrets will be used when deployment is created.${NC}"
     fi
 else
     echo -e "${RED}❌ Failed to apply secret${NC}"

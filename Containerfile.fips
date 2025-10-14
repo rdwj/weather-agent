@@ -1,0 +1,94 @@
+# FIPS-compliant production build for Weather Agent
+# Uses Red Hat UBI9 with FIPS-enabled OpenSSL
+
+FROM registry.access.redhat.com/ubi9/python-311:latest AS builder
+
+# Enable FIPS mode in build environment
+ENV OPENSSL_FIPS=1
+
+# Set working directory
+WORKDIR /build
+
+# Switch to root for system packages
+USER 0
+
+# Install FIPS-enabled OpenSSL development packages and build tools
+# These are needed to compile cryptography from source against FIPS OpenSSL
+RUN dnf install -y \
+    gcc \
+    gcc-c++ \
+    python3-devel \
+    openssl-devel \
+    libffi-devel \
+    cargo \
+    rust \
+    && dnf clean all
+
+# Copy requirements
+COPY requirements.txt /build/
+
+# Fix permissions for non-root user before switching
+RUN chown -R 1001:0 /build && chmod -R g=u /build
+
+# Switch to non-root for pip install
+USER 1001
+
+# Create virtual environment and install dependencies
+# Force cryptography to build from source against FIPS-enabled OpenSSL
+RUN python -m venv /build/venv && \
+    . /build/venv/bin/activate && \
+    pip install --upgrade pip setuptools wheel && \
+    # Build cryptography from source to ensure FIPS-compatible OpenSSL linkage
+    pip install --no-binary cryptography cryptography && \
+    # Install remaining dependencies
+    pip install --no-cache-dir -r /build/requirements.txt && \
+    # Verify OpenSSL version
+    python -c "from cryptography.hazmat.backends.openssl import backend; print(f'OpenSSL: {backend.openssl_version_text()}')"
+
+# Production stage
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+# Enable FIPS mode
+ENV OPENSSL_FIPS=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH="/app:$PYTHONPATH"
+
+# Switch to root for system setup
+USER 0
+
+# Update system packages to patch vulnerabilities and install runtime dependencies
+RUN dnf update -y vim-minimal vim-filesystem && \
+    dnf install -y openssl && \
+    dnf clean all
+
+# Create app directory structure
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder --chown=1001:0 /build/venv /opt/venv
+
+# Copy application code
+COPY --chown=1001:0 src/ ./src/
+COPY --chown=1001:0 ui/ ./ui/
+COPY --chown=1001:0 prompts/ ./prompts/
+
+# Create necessary directories and set permissions
+RUN mkdir -p /tmp/claude /app/logs && \
+    chown -R 1001:0 /app /opt/venv && \
+    chmod -R g=u /app /opt/venv && \
+    chmod -R 777 /tmp/claude /app/logs
+
+# Switch back to non-root user
+USER 1001
+
+# Expose ports
+EXPOSE 8000 8501
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5.0)" || exit 1
+
+# Default command - run API server
+CMD ["python", "-m", "uvicorn", "src.api.weather_api:app", "--host", "0.0.0.0", "--port", "8000"]

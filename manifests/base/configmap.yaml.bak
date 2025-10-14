@@ -38,7 +38,7 @@ data:
   RATE_LIMIT_BURST_SIZE: "10"
 
   # MCP Configuration
-  MCP_SERVER_URL: https://mcp-server-weather-mcp.apps.cluster-6gftl.6gftl.sandbox3207.opentlc.com/mcp
+  MCP_SERVER_URL: https://mcp-server-weather-mcp-3.apps.cluster-nl55d.nl55d.sandbox1207.opentlc.com
   MCP_TRANSPORT: http
   MCP_CONNECTION_TIMEOUT: "30"
   MCP_REQUEST_TIMEOUT: "10"

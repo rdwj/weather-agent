@@ -1,0 +1,23 @@
+name: "Travel Weather Analysis"
+description: "Prompt for analyzing weather for travel planning"
+template: |
+  Analyze this weather for travel planning and write a helpful report:
+  {weather_data}
+
+  Cover:
+  1. Driving conditions and visibility
+  2. Potential impacts on flights or other travel
+  3. Best times to travel
+  4. What travelers should prepare for
+
+  Be practical and specific. Use proper formatting.
+
+parameters:
+  temperature: 0.6
+  max_tokens: 1500
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON-formatted weather data to analyze for travel"
+    required: true

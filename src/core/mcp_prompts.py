@@ -108,56 +108,50 @@ class MCPPromptHandler:
 
     def _serialize_argument(self, value: Any) -> Union[str, Any]:
         """
-        Serialize complex argument to JSON string as required by MCP spec.
+        Prepare arguments for FastMCP client.
+
+        FastMCP v2.9+ automatically serializes complex types (dicts, lists, dataclasses)
+        to JSON strings as required by the MCP specification. We just need to convert
+        any special Python types to standard JSON-compatible types.
 
         Args:
-            value: Value to serialize
+            value: Value to prepare
 
         Returns:
-            Serialized value (JSON string for complex types, unchanged for simple types)
+            Value ready for FastMCP client (unchanged for most types)
         """
-        # Simple types pass through unchanged
-        if isinstance(value, (str, bool, type(None))):
+        # Simple types pass through unchanged - FastMCP handles them
+        if isinstance(value, (str, bool, type(None), int, float)):
             return value
 
-        # Numbers might need special handling
-        if isinstance(value, (int, float)):
+        # Dicts and lists pass through - FastMCP will serialize them
+        if isinstance(value, (dict, list, tuple)):
             return value
 
-        # Complex types need JSON serialization
+        # Convert special types to JSON-compatible forms
         try:
-            # Handle dataclasses
+            # Handle dataclasses - convert to dict
             if is_dataclass(value):
-                value = asdict(value)
+                return asdict(value)
 
-            # Handle datetime objects
+            # Handle datetime objects - convert to ISO string
             if isinstance(value, datetime):
-                value = value.isoformat()
+                return value.isoformat()
 
-            # Handle Decimal
+            # Handle Decimal - convert to float
             if isinstance(value, Decimal):
-                value = float(value)
+                return float(value)
 
-            # Serialize complex types to JSON string
-            if isinstance(value, (dict, list, tuple)):
-                # Use pydantic_core for consistency with FastMCP
-                try:
-                    from pydantic_core import to_json
-                    return to_json(value).decode('utf-8')
-                except ImportError:
-                    # Fallback to standard json
-                    return json.dumps(value)
-
-            # For other objects, try to convert to dict first
+            # For other objects with __dict__, convert to dict
             if hasattr(value, '__dict__'):
-                obj_dict = {k: v for k, v in value.__dict__.items() if not k.startswith('_')}
-                return json.dumps(obj_dict)
+                return {k: v for k, v in value.__dict__.items() if not k.startswith('_')}
 
             # Last resort: convert to string
+            logger.warning(f"Unknown type {type(value)}, converting to string")
             return str(value)
 
         except Exception as e:
-            logger.warning(f"Failed to serialize argument: {e}, using string representation")
+            logger.warning(f"Failed to prepare argument: {e}, using string representation")
             return str(value)
 
     async def get_prompt(
@@ -194,7 +188,12 @@ class MCPPromptHandler:
             logger.debug(f"Getting prompt '{prompt_name}' with args: {serialized_args}")
 
             # Get rendered prompt from server
-            result = await self._client.get_prompt(prompt_name, serialized_args)
+            try:
+                result = await self._client.get_prompt(prompt_name, serialized_args)
+            except Exception as get_error:
+                logger.error(f"MCP server error for prompt '{prompt_name}': {get_error}")
+                logger.error(f"Arguments passed: {serialized_args}")
+                raise
 
             # Convert to PromptMessage objects
             messages = []
