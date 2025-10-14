@@ -9,7 +9,7 @@ and LLM analysis.
 import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from ..core.base_agent import BaseAgent
 from ..core.conversation_memory import get_memory_manager
@@ -96,6 +96,21 @@ class WeatherAgent(BaseAgent):
     def _get_cache_key(self, location: str) -> str:
         """Generate cache key for location."""
         return f"weather:{location.lower().strip()}"
+
+    def _clean_dict_for_mcp(self, data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Remove None values from dict for MCP prompt compatibility.
+
+        The MCP server cannot handle None/null values in prompt arguments,
+        so we filter them out before passing to get_prompt().
+
+        Args:
+            data: Dictionary that may contain None values
+
+        Returns:
+            Dictionary with None values removed
+        """
+        return {k: v for k, v in data.items() if v is not None}
 
     async def get_weather(
         self,
@@ -224,11 +239,11 @@ class WeatherAgent(BaseAgent):
         analysis_type: str = "general"
     ) -> dict[str, Any]:
         """
-        Analyze weather data using LLM or formatted narrative.
+        Analyze weather data using MCP or local prompts with LLM.
 
         Args:
             weather_data: Weather data to analyze
-            analysis_type: Type of analysis (general, safety, activity, travel)
+            analysis_type: Type of analysis (general, severe, brief, safety, activity, travel)
 
         Returns:
             Analysis results
@@ -244,54 +259,83 @@ class WeatherAgent(BaseAgent):
             }
 
         try:
-            # Get appropriate prompt based on analysis type
-            prompts_map = {
+            # Map analysis types to MCP prompts
+            mcp_prompts = {
                 "general": "weather_report",
-                "safety": "severe_weather_alert",
+                "severe": "severe_weather_alert",
                 "brief": "daily_forecast_brief",
                 "comparison": "weather_comparison"
             }
 
-            prompt_name = prompts_map.get(analysis_type, "weather_report")
+            # Map analysis types to local prompts
+            local_prompts = {
+                "safety": "safety_analysis",
+                "activity": "activity_analysis",
+                "travel": "travel_analysis"
+            }
 
-            # Get prompt template
-            prompt_result = await self.get_prompt(prompt_name, {})
+            prompt_name = None
+            prompt_content = None
 
-            if prompt_result.success and prompt_result.messages:
-                # Use the prompt template
-                prompt_content = prompt_result.messages[0].content
+            # Check if this is an MCP prompt
+            if analysis_type in mcp_prompts:
+                prompt_name = mcp_prompts[analysis_type]
+                try:
+                    # NOTE: Pass weather_data as dict, not JSON string - MCP server will handle serialization
+                    # NOTE: Remove None values - MCP server cannot handle null values
+                    prompt_result = await self.get_prompt(
+                        prompt_name,
+                        {"weather_data": self._clean_dict_for_mcp(weather_data)}
+                    )
 
-                # Replace placeholders
-                prompt_content = prompt_content.replace(
-                    "{weather_data}",
-                    json.dumps(weather_data, indent=2)
-                ).replace(
-                    "{current_weather}",
-                    json.dumps(weather_data, indent=2)
-                ).replace(
-                    "{forecast_data}",
-                    weather_data.get("forecast", "No forecast available")
-                ).replace(
-                    "{weather_alerts}",
-                    "No active alerts"
-                )
+                    if prompt_result.success and prompt_result.messages:
+                        prompt_content = prompt_result.messages[0].content
+                    else:
+                        logger.error(f"Could not get MCP prompt '{prompt_name}'")
+                        return {
+                            "success": False,
+                            "error": f"MCP prompt '{prompt_name}' unavailable"
+                        }
 
-                # Get LLM analysis
-                analysis = await self.call_llm(
-                    prompt=prompt_content,
-                    temperature=0.7
-                )
+                except Exception as e:
+                    logger.error(f"Error retrieving MCP prompt '{prompt_name}': {e}")
+                    return {
+                        "success": False,
+                        "error": f"Failed to retrieve MCP prompt: {str(e)}"
+                    }
 
-                return {
-                    "success": True,
-                    "analysis": analysis,
-                    "type": analysis_type,
-                    "prompt_used": prompt_name
-                }
+            # Check if this is a local prompt
+            elif analysis_type in local_prompts:
+                prompt_name = local_prompts[analysis_type]
+                try:
+                    prompt_content = self._prompt_loader.load_prompt(
+                        prompt_name,
+                        {"weather_data": json.dumps(weather_data, indent=2)}
+                    )
+                except Exception as e:
+                    logger.error(f"Error loading local prompt '{prompt_name}': {e}")
+                    return {
+                        "success": False,
+                        "error": f"Local prompt '{prompt_name}' unavailable: {str(e)}"
+                    }
 
             else:
-                # Fallback to custom prompt
-                return await self._analyze_with_custom_prompt(weather_data, analysis_type)
+                # Default to general analysis
+                logger.warning(f"Unknown analysis type '{analysis_type}', defaulting to general")
+                return await self.analyze_weather(weather_data, "general")
+
+            # Get LLM analysis
+            analysis = await self.call_llm(
+                prompt=prompt_content,
+                temperature=0.7
+            )
+
+            return {
+                "success": True,
+                "analysis": analysis,
+                "type": analysis_type,
+                "prompt_used": prompt_name
+            }
 
         except Exception as e:
             logger.error(f"Weather analysis failed: {e}")
@@ -300,9 +344,69 @@ class WeatherAgent(BaseAgent):
                 "error": str(e)
             }
 
+    async def analyze_severe_weather(
+        self,
+        weather_data: dict[str, Any],
+        alerts: Optional[str] = None
+    ) -> dict[str, Any]:
+        """
+        Analyze weather for severe or concerning conditions using MCP server's severe_weather_alert prompt.
+
+        Args:
+            weather_data: Current weather data
+            alerts: Active weather alerts (optional)
+
+        Returns:
+            Severe weather analysis with safety recommendations
+        """
+        if not self.llm_client.is_available():
+            return {
+                "success": False,
+                "error": "LLM not available for severe weather analysis"
+            }
+
+        try:
+            # Get MCP prompt with arguments
+            # NOTE: Pass weather_data as dict, not JSON string - MCP server will handle serialization
+            # NOTE: Remove None values - MCP server cannot handle null values
+            prompt_result = await self.get_prompt(
+                "severe_weather_alert",
+                {
+                    "weather_data": self._clean_dict_for_mcp(weather_data),
+                    "weather_alerts": alerts or "None"
+                }
+            )
+
+            if not prompt_result.success or not prompt_result.messages:
+                logger.error("Could not get MCP severe_weather_alert prompt")
+                return {
+                    "success": False,
+                    "error": "Could not retrieve severe weather prompt from MCP server"
+                }
+
+            # Call LLM with rendered prompt
+            analysis = await self.call_llm(
+                prompt=prompt_result.messages[0].content,
+                temperature=0.3  # Lower temp for safety-critical info
+            )
+
+            return {
+                "success": True,
+                "analysis": analysis,
+                "type": "severe_weather",
+                "prompt_used": "severe_weather_alert"
+            }
+
+        except Exception as e:
+            logger.error(f"Severe weather analysis failed: {e}")
+            return {
+                "success": False,
+                "error": f"Severe weather analysis failed: {str(e)}"
+            }
+
     async def _format_weather_narrative(self, weather_data: dict[str, Any]) -> str:
         """
-        Format weather data as a nice narrative using LLM with formatting prompt.
+        Format weather data as a nice narrative using MCP server's weather_report prompt.
 
         Args:
             weather_data: Weather data dictionary
@@ -312,46 +416,66 @@ class WeatherAgent(BaseAgent):
         """
         # If LLM is not available, use simple formatting
         if not self.llm_client.is_available():
-            location = weather_data.get("location", "the requested location")
-            temp = weather_data.get("temperature", "N/A")
-            conditions = weather_data.get("conditions", "N/A")
-            humidity = weather_data.get("humidity", "N/A")
-            wind = weather_data.get("wind", "N/A")
-            forecast = weather_data.get("forecast", "")
+            return self._simple_format_fallback(weather_data)
 
-            # Build narrative
-            narrative = f"Here's the current weather for **{location}**:\n\n"
-            narrative += f"🌡️ **Temperature:** {temp}\n"
-            narrative += f"☁️ **Conditions:** {conditions}\n"
-            narrative += f"💧 **Humidity:** {humidity}\n"
-            narrative += f"💨 **Wind:** {wind}\n"
-
-            if forecast and forecast != "N/A":
-                narrative += f"\n📅 **Forecast:**\n{forecast}"
-
-            return narrative
-
-        # Use LLM with formatting prompt
+        # Use MCP weather_report prompt
         try:
-            # Load weather report formatting prompt
-            formatting_prompt = self._prompt_loader.load_prompt(
-                "weather_report_format",
-                {"weather_data": json.dumps(weather_data, indent=2)}
+            # Get MCP prompt with arguments
+            # NOTE: Pass weather_data as dict, not JSON string - MCP server will handle serialization
+            # NOTE: Remove None values - MCP server cannot handle null values
+            prompt_result = await self.get_prompt(
+                "weather_report",
+                {
+                    "weather_data": self._clean_dict_for_mcp(weather_data),
+                    "output_format": "narrative"
+                }
             )
 
-            # Get formatted narrative from LLM
+            if not prompt_result.success or not prompt_result.messages:
+                logger.error("Could not get MCP weather_report prompt")
+                raise ValueError("MCP prompt unavailable")
+
+            # Call LLM with rendered prompt
             narrative = await self.call_llm(
-                prompt=formatting_prompt,
+                prompt=prompt_result.messages[0].content,
                 temperature=0.7
             )
 
             return narrative if isinstance(narrative, str) else str(narrative)
 
         except Exception as e:
-            logger.error(f"Error formatting weather narrative: {e}")
-            # Fallback to simple format on error
-            location = weather_data.get("location", "the requested location")
-            return f"Weather data for {location}: {json.dumps(weather_data, indent=2)}"
+            logger.error(f"Error formatting weather narrative with MCP prompt: {e}")
+            # Return simple fallback
+            return self._simple_format_fallback(weather_data)
+
+    def _simple_format_fallback(self, weather_data: dict[str, Any]) -> str:
+        """
+        Simple format fallback when MCP prompts or LLM unavailable.
+
+        Args:
+            weather_data: Weather data dictionary
+
+        Returns:
+            Simple formatted string
+        """
+        location = weather_data.get("location", "the requested location")
+        temp = weather_data.get("temperature", "N/A")
+        conditions = weather_data.get("conditions", "N/A")
+        humidity = weather_data.get("humidity", "N/A")
+        wind = weather_data.get("wind", "N/A")
+        forecast = weather_data.get("forecast", "")
+
+        # Build narrative
+        narrative = f"Here's the current weather for **{location}**:\n\n"
+        narrative += f"🌡️ **Temperature:** {temp}\n"
+        narrative += f"☁️ **Conditions:** {conditions}\n"
+        narrative += f"💧 **Humidity:** {humidity}\n"
+        narrative += f"💨 **Wind:** {wind}\n"
+
+        if forecast and forecast != "N/A":
+            narrative += f"\n📅 **Forecast:**\n{forecast}"
+
+        return narrative
 
     async def _analyze_with_custom_prompt(
         self,
@@ -424,8 +548,8 @@ class WeatherAgent(BaseAgent):
             }
 
         try:
-            # Clear tool history for this operation
-            self.clear_tool_call_history()
+            # Clear MCP history for this operation
+            self.clear_mcp_history()
 
             # Fetch weather for all locations
             weather_data = {}
@@ -440,43 +564,55 @@ class WeatherAgent(BaseAgent):
                 return {
                     "success": False,
                     "error": "Could not get weather for enough locations",
-                    "tool_calls": self.get_tool_call_history()
+                    "mcp_operations": self.get_mcp_history()
                 }
 
             # Analyze comparison
             if self.llm_client.is_available():
-                # Load comparison prompt from YAML
                 try:
-                    comparison_prompt = self._prompt_loader.load_prompt(
-                        "location_comparison",
-                        {"weather_data": json.dumps(weather_data, indent=2)}
+                    # Get MCP prompt with arguments
+                    # NOTE: weather_comparison prompt expects each location's data as a JSON STRING
+                    # This is different from other prompts that expect dicts directly
+                    # Remove None values and convert each location's data to JSON string
+                    cleaned_weather_data = {
+                        loc: json.dumps(self._clean_dict_for_mcp(data))
+                        for loc, data in weather_data.items()
+                    }
+                    prompt_result = await self.get_prompt(
+                        "weather_comparison",
+                        {
+                            "locations_data": cleaned_weather_data,
+                            "comparison_style": "detailed"
+                        }
                     )
-                except (FileNotFoundError, KeyError) as e:
-                    logger.warning(f"Error loading comparison prompt: {e}, using fallback")
-                    comparison_prompt = f"""
-                        Compare the weather conditions between these locations:
-                        {json.dumps(weather_data, indent=2)}
 
-                        Provide:
-                        1. Temperature comparison
-                        2. Condition differences
-                        3. Best/worst weather location
-                        4. Key differences to note
-                        5. Recommendations for each location
-                    """
+                    if not prompt_result.success or not prompt_result.messages:
+                        logger.error("Could not get MCP weather_comparison prompt")
+                        raise ValueError("MCP prompt unavailable")
 
-                comparison = await self.call_llm(
-                    prompt=comparison_prompt,
-                    temperature=0.6
-                )
+                    # Call LLM with rendered prompt
+                    comparison = await self.call_llm(
+                        prompt=prompt_result.messages[0].content,
+                        temperature=0.6
+                    )
 
-                return {
-                    "success": True,
-                    "locations": list(weather_data.keys()),
-                    "weather_data": weather_data,
-                    "comparison": comparison,
-                    "tool_calls": self.get_tool_call_history()
-                }
+                    return {
+                        "success": True,
+                        "locations": list(weather_data.keys()),
+                        "weather_data": weather_data,
+                        "comparison": comparison,
+                        "mcp_operations": self.get_mcp_history()
+                    }
+
+                except Exception as e:
+                    logger.error(f"Location comparison with MCP prompt failed: {e}")
+                    return {
+                        "success": False,
+                        "error": f"Comparison analysis failed: {str(e)}",
+                        "locations": list(weather_data.keys()),
+                        "weather_data": weather_data,
+                        "mcp_operations": self.get_mcp_history()
+                    }
             else:
                 # Return raw data without analysis
                 return {
@@ -484,7 +620,7 @@ class WeatherAgent(BaseAgent):
                     "locations": list(weather_data.keys()),
                     "weather_data": weather_data,
                     "comparison": "LLM analysis not available",
-                    "tool_calls": self.get_tool_call_history()
+                    "mcp_operations": self.get_mcp_history()
                 }
 
         except Exception as e:
@@ -534,35 +670,36 @@ class WeatherAgent(BaseAgent):
 
         # Add LLM interpretation if available
         if self.llm_client.is_available():
-            # Load forecast prompt from YAML
             try:
-                forecast_prompt = self._prompt_loader.load_prompt(
-                    "forecast_analysis",
+                # Get MCP prompt with arguments
+                # NOTE: Pass current_weather as dict, not JSON string - MCP server will handle serialization
+                # NOTE: Remove None values - MCP server cannot handle null values
+                # NOTE: forecast_data must be a dict per MCP prompt spec, so wrap string in dict
+                prompt_result = await self.get_prompt(
+                    "daily_forecast_brief",
                     {
-                        "weather_data": json.dumps(weather_data, indent=2),
-                        "days": str(days)
+                        "current_weather": self._clean_dict_for_mcp(result["current"]),
+                        "forecast_data": {"forecast": result["forecast_text"]},
+                        "target_audience": "general public"
                     }
                 )
-            except (FileNotFoundError, KeyError) as e:
-                logger.warning(f"Error loading forecast prompt: {e}, using fallback")
-                forecast_prompt = f"""
-                    Based on this weather data, provide a {days}-day forecast outlook:
-                    {json.dumps(weather_data, indent=2)}
 
-                    Include:
-                    1. Daily temperature trends
-                    2. Expected conditions
-                    3. Precipitation likelihood
-                    4. Weekend weather if applicable
-                    5. Planning recommendations
-                """
+                if not prompt_result.success or not prompt_result.messages:
+                    logger.error("Could not get MCP daily_forecast_brief prompt")
+                    raise ValueError("MCP prompt unavailable")
 
-            forecast_analysis = await self.call_llm(
-                prompt=forecast_prompt,
-                temperature=0.6
-            )
+                # Call LLM with rendered prompt
+                forecast_analysis = await self.call_llm(
+                    prompt=prompt_result.messages[0].content,
+                    temperature=0.6
+                )
 
-            result["forecast_analysis"] = forecast_analysis
+                result["forecast_analysis"] = forecast_analysis
+
+            except Exception as e:
+                logger.error(f"Forecast analysis with MCP prompt failed: {e}")
+                result["forecast_analysis"] = None
+                result["error"] = f"Forecast analysis failed: {str(e)}"
 
         return result
 
@@ -584,8 +721,8 @@ class WeatherAgent(BaseAgent):
             Agent response with weather information and thread_id
         """
         try:
-            # Clear tool history for this chat operation
-            self.clear_tool_call_history()
+            # Clear MCP history for this chat operation
+            self.clear_mcp_history()
 
             # Get or create thread_id
             import uuid
@@ -722,7 +859,7 @@ Only set needs_clarification to true if there is ABSOLUTELY NO location mentione
                 "intent": intent,
                 "locations": locations,
                 "thread_id": thread_id,
-                "tool_calls": self.get_tool_call_history()
+                "mcp_operations": self.get_mcp_history()
             }
 
         except Exception as e:
@@ -742,7 +879,7 @@ Only set needs_clarification to true if there is ABSOLUTELY NO location mentione
                 "response": error_response,
                 "error": str(e),
                 "thread_id": thread_id,
-                "tool_calls": self.get_tool_call_history()
+                "mcp_operations": self.get_mcp_history()
             }
 
     async def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:

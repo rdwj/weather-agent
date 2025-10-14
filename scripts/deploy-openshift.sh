@@ -14,8 +14,10 @@ NC='\033[0m' # No Color
 
 # Configuration
 NAMESPACE="${NAMESPACE:-weather-agent}"
+MCP_NAMESPACE="${MCP_NAMESPACE:-weather-mcp}"
 REGISTRY="${REGISTRY:-image-registry.openshift-image-registry.svc:5000}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
+AUTO_MODE="${AUTO_MODE:-false}"  # Set to true to skip prompts
 
 # Function to print colored messages
 print_message() {
@@ -34,6 +36,107 @@ check_oc_login() {
     print_message "$GREEN" "✅ Logged in as: $(oc whoami)"
 }
 
+# Function to discover weather-mcp server URL
+discover_mcp_url() {
+    print_message "$BLUE" "🔍 Discovering Weather MCP server URL..."
+
+    if ! oc get namespace "$MCP_NAMESPACE" &>/dev/null; then
+        print_message "$YELLOW" "⚠️  Namespace $MCP_NAMESPACE not found"
+        print_message "$YELLOW" "   Using MCP_URL from .env file if present"
+        return 0
+    fi
+
+    # Try to find weather-mcp route
+    if oc get route -n "$MCP_NAMESPACE" mcp-server &>/dev/null; then
+        MCP_HOST=$(oc get route mcp-server -n "$MCP_NAMESPACE" -o jsonpath='{.spec.host}')
+        MCP_PATH=$(oc get route mcp-server -n "$MCP_NAMESPACE" -o jsonpath='{.spec.path}')
+
+        # Combine host and path, ensuring trailing slash
+        if [ -n "$MCP_PATH" ]; then
+            DISCOVERED_MCP_URL="https://$MCP_HOST$MCP_PATH/"
+        else
+            DISCOVERED_MCP_URL="https://$MCP_HOST/"
+        fi
+        print_message "$GREEN" "✅ Discovered MCP URL: $DISCOVERED_MCP_URL"
+
+        # Update .env file with discovered URL
+        if [ -f ".env" ]; then
+            if grep -q "^MCP_URL=" .env; then
+                # Update existing MCP_URL
+                sed -i.bak "s|^MCP_URL=.*|MCP_URL=$DISCOVERED_MCP_URL|" .env
+                rm -f .env.bak
+                print_message "$GREEN" "✅ Updated MCP_URL in .env file"
+            else
+                # Add MCP_URL if not present
+                echo "MCP_URL=$DISCOVERED_MCP_URL" >> .env
+                print_message "$GREEN" "✅ Added MCP_URL to .env file"
+            fi
+        fi
+    else
+        print_message "$YELLOW" "⚠️  MCP server route not found in $MCP_NAMESPACE namespace"
+        print_message "$YELLOW" "   Using MCP_URL from .env file if present"
+    fi
+}
+
+# Function to setup Dockerfile symlink
+setup_dockerfile_symlink() {
+    print_message "$BLUE" "🔗 Setting up Dockerfile symlink..."
+
+    if [ -f "Dockerfile" ]; then
+        if [ -L "Dockerfile" ]; then
+            print_message "$GREEN" "✅ Dockerfile symlink already exists"
+        else
+            print_message "$YELLOW" "⚠️  Dockerfile exists but is not a symlink"
+            if [ "$AUTO_MODE" = "true" ]; then
+                REPLY="y"
+            else
+                read -p "Replace with symlink to Containerfile? (y/n): " -r
+            fi
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -f Dockerfile
+                ln -sf Containerfile Dockerfile
+                print_message "$GREEN" "✅ Created Dockerfile symlink"
+            fi
+        fi
+    else
+        ln -sf Containerfile Dockerfile
+        print_message "$GREEN" "✅ Created Dockerfile symlink"
+    fi
+}
+
+# Function to update manifests to use internal registry
+update_manifests_for_internal_registry() {
+    print_message "$BLUE" "📝 Updating manifests to use internal registry..."
+
+    local updated=false
+
+    # Update API deployment
+    if [ -f "manifests/openshift/api/deployment.yaml" ]; then
+        if grep -q "quay.io" manifests/openshift/api/deployment.yaml; then
+            sed -i.bak "s|image: quay.io.*|image: $REGISTRY/$NAMESPACE/weather-agent-api:latest|" \
+                manifests/openshift/api/deployment.yaml
+            rm -f manifests/openshift/api/deployment.yaml.bak
+            print_message "$GREEN" "✅ Updated API manifest to use internal registry"
+            updated=true
+        fi
+    fi
+
+    # Update UI deployment
+    if [ -f "manifests/openshift/ui/deployment.yaml" ]; then
+        if grep -q "quay.io" manifests/openshift/ui/deployment.yaml; then
+            sed -i.bak "s|image: quay.io.*|image: $REGISTRY/$NAMESPACE/weather-agent-ui:latest|" \
+                manifests/openshift/ui/deployment.yaml
+            rm -f manifests/openshift/ui/deployment.yaml.bak
+            print_message "$GREEN" "✅ Updated UI manifest to use internal registry"
+            updated=true
+        fi
+    fi
+
+    if [ "$updated" = false ]; then
+        print_message "$GREEN" "✅ Manifests already configured for internal registry"
+    fi
+}
+
 # Function to create namespace if it doesn't exist
 setup_namespace() {
     if oc get namespace "$NAMESPACE" &>/dev/null; then
@@ -43,9 +146,6 @@ setup_namespace() {
         oc new-project "$NAMESPACE" --display-name="Weather Agent" \
             --description="Intelligent Weather Assistant with MCP Integration"
     fi
-
-    # Ensure we're using the correct namespace
-    oc project "$NAMESPACE"
 }
 
 # Function to create secrets
@@ -55,7 +155,11 @@ create_secrets() {
     # Check if secret already exists in cluster
     if oc get secret weather-agent-secrets -n "$NAMESPACE" &>/dev/null; then
         print_message "$YELLOW" "ℹ️  Secrets already exist."
-        read -p "Do you want to update them from .env? (y/n): " -r
+        if [ "$AUTO_MODE" = "true" ]; then
+            REPLY="y"
+        else
+            read -p "Do you want to update them from .env? (y/n): " -r
+        fi
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             if [ -f "scripts/apply-secret.sh" ]; then
                 print_message "$BLUE" "Updating secrets from .env file..."
@@ -116,7 +220,7 @@ build_and_push() {
         # Build using BuildConfig in OpenShift
         print_message "$BLUE" "Using OpenShift BuildConfig..."
 
-        # Create BuildConfig if it doesn't exist (use Containerfile.prod)
+        # Create BuildConfig if it doesn't exist
         if ! oc get buildconfig weather-agent -n "$NAMESPACE" &>/dev/null; then
             oc new-build --binary --name=weather-agent \
                 --strategy=docker \
@@ -124,10 +228,8 @@ build_and_push() {
                 -n "$NAMESPACE"
         fi
 
-        # Start build with the production Containerfile
-        oc start-build weather-agent --from-dir=. --follow \
-            --build-arg-file=Containerfile.prod \
-            -n "$NAMESPACE"
+        # Start build from current directory
+        oc start-build weather-agent --from-dir=. --follow -n "$NAMESPACE"
 
         # Tag for API and UI
         oc tag weather-agent:latest weather-agent-api:latest -n "$NAMESPACE"
@@ -139,7 +241,7 @@ build_and_push() {
         # Build image
         podman build --platform linux/amd64 \
             -t "$REGISTRY/$NAMESPACE/weather-agent:$IMAGE_TAG" \
-            -f Containerfile.prod . --no-cache
+            -f Containerfile . --no-cache
 
         # Push to registry
         podman push "$REGISTRY/$NAMESPACE/weather-agent:$IMAGE_TAG"
@@ -300,7 +402,7 @@ pre_deployment_checklist() {
     fi
 
     # Check Containerfile
-    if [ -f "Containerfile.prod" ] || [ -f "Containerfile" ]; then
+    if [ -f "Containerfile" ]; then
         print_message "$GREEN" "✅ Containerfile found"
     else
         print_message "$RED" "❌ Containerfile not found"
@@ -333,11 +435,24 @@ main() {
     # Check prerequisites
     check_oc_login
 
+    # Setup Dockerfile symlink (required for OpenShift)
+    setup_dockerfile_symlink
+
+    # Discover MCP URL from weather-mcp namespace
+    discover_mcp_url
+
+    # Update manifests to use internal registry
+    update_manifests_for_internal_registry
+
     # Setup namespace
     setup_namespace
 
     # Ask about build
-    read -p "Do you want to build and push the container image? (y/n): " -r
+    if [ "$AUTO_MODE" = "true" ]; then
+        REPLY="y"
+    else
+        read -p "Do you want to build and push the container image? (y/n): " -r
+    fi
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         build_and_push
     fi

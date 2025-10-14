@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
       - name: weather-agent-api
-        image: quay.io/wjackson/agent-demos:weather-agent
+        image: image-registry.openshift-image-registry.svc:5000/weather-agent/weather-agent-api:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8000

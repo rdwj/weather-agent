@@ -245,6 +245,41 @@ async def analyze_weather(request: WeatherAnalysisRequest):
     return result
 
 
+@app.post("/weather/severe-analysis")
+async def analyze_severe_weather(request: WeatherAnalysisRequest):
+    """
+    Analyze weather for severe or concerning conditions.
+
+    Uses MCP server's severe_weather_alert prompt to evaluate weather data
+    for immediate hazards, health/safety concerns, travel impacts, and
+    recommended actions with severity classification.
+
+    Args:
+        request: Weather data and optional alerts
+
+    Returns:
+        Severe weather analysis with safety recommendations
+    """
+    if not weather_agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    # Extract alerts from weather_data if present
+    alerts = request.weather_data.get("alerts", None)
+
+    result = await weather_agent.analyze_severe_weather(
+        request.weather_data,
+        alerts
+    )
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("error", "Severe weather analysis failed")
+        )
+
+    return result
+
+
 @app.post("/weather/compare")
 async def compare_locations(request: LocationComparisonRequest):
     """
@@ -440,6 +475,52 @@ async def list_resources():
 
     resources = await weather_agent.list_resources()
     return {"resources": resources}
+
+
+@app.get("/citations")
+async def get_citations():
+    """
+    Get citation information for all APIs used by the weather service.
+
+    Returns:
+        Citation and attribution information for Weather.gov and OpenStreetMap
+    """
+    if not weather_agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    resource = await weather_agent.read_resource("citations://all")
+
+    if not resource:
+        raise HTTPException(status_code=404, detail="Citations not available")
+
+    return {
+        "success": True,
+        "citations": resource.text,
+        "mime_type": resource.mime_type
+    }
+
+
+@app.get("/data-sources")
+async def get_data_sources():
+    """
+    Get information about all data sources used by the weather service.
+
+    Returns:
+        Data source information including reliability and appropriate use cases
+    """
+    if not weather_agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    resource = await weather_agent.read_resource("info://data-sources")
+
+    if not resource:
+        raise HTTPException(status_code=404, detail="Data sources not available")
+
+    return {
+        "success": True,
+        "data_sources": resource.text,
+        "mime_type": resource.mime_type
+    }
 
 
 @app.get("/conversation/{thread_id}")

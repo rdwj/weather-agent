@@ -126,15 +126,26 @@ The agent connects to an **external Weather MCP server** (not included in this r
 - Connection happens at agent initialization in FastAPI lifespan
 
 ### Prompt Management Pattern
-All prompts are stored in `prompts/` as YAML files for easy editing:
 
+The agent uses a **hybrid prompt strategy** with MCP server as the primary source:
+
+**MCP Prompts** (retrieved from Weather MCP server):
+- `weather_report` - Professional weather report generation with narrative formatting
+- `daily_forecast_brief` - Comprehensive daily weather briefing for target audiences
+- `weather_comparison` - Multi-location comparison with travel recommendations
+- `severe_weather_alert` - Severe weather analysis with safety recommendations
+
+**Local Prompts** (stored in `prompts/` as YAML files):
 - `system_prompt.yaml` - Agent personality and instructions
-- `weather_report_format.yaml` - Natural language weather report formatting
-- `general_analysis.yaml`, `safety_analysis.yaml`, etc. - Specific analysis types
-- `location_comparison.yaml` - Multi-location comparison prompts
-- `forecast_analysis.yaml` - Extended forecast interpretation
+- `general_analysis.yaml` - Custom general weather analysis
+- `safety_analysis.yaml` - Safety-focused analysis
+- `activity_analysis.yaml` - Activity recommendations based on weather
+- `travel_analysis.yaml` - Travel planning advice
 
-**Variable substitution** uses `{variable_name}` format in templates. Prompts are loaded via `PromptLoader` utility.
+**Implementation:**
+- MCP prompts: Retrieved via `BaseAgent.get_prompt()` → rendered by MCP server → passed to `BaseAgent.call_llm()`
+- Local prompts: Loaded via `PromptLoader.load_prompt()` with `{variable_name}` substitution → passed to `BaseAgent.call_llm()`
+- Fallback: When MCP prompts unavailable, return error to user (no local backup copies)
 
 ### Conversation Memory Pattern
 The agent implements **thread-based conversation memory** (`src/core/conversation_memory.py`):
@@ -162,9 +173,10 @@ The agent implements **thread-based conversation memory** (`src/core/conversatio
 - `src/core/conversation_memory.py` - Thread-based conversation state management
 
 ### Weather Agent Implementation
-- `src/agents/weather_agent.py` - Main agent implementation (~800 lines)
-  - Key methods: `get_weather()`, `compare_locations()`, `get_forecast()`, `chat()`, `analyze_weather()`
-  - Uses prompt loader for YAML prompts
+- `src/agents/weather_agent.py` - Main agent implementation (~860 lines)
+  - Key methods: `get_weather()`, `compare_locations()`, `get_forecast()`, `chat()`, `analyze_weather()`, `analyze_severe_weather()`
+  - Uses MCP prompts for weather-specific analysis (weather_report, daily_forecast_brief, weather_comparison, severe_weather_alert)
+  - Uses local prompts for agent-specific analysis (safety, activity, travel)
   - Implements geocoding fallback when direct weather lookup fails
 
 ### API Layer
@@ -237,11 +249,25 @@ See `.env.example` for complete configuration template.
 
 ### When Working with Prompts
 
-- All prompts are YAML files in `prompts/` directory
+**MCP Prompts** (Primary for weather-specific prompts):
+- Retrieved from MCP server using `await self.get_prompt(prompt_name, arguments)`
+- MCP server handles variable substitution and rendering
+- Returns `PromptResult` with rendered message content
+- Pass rendered content to `await self.call_llm(prompt=content)`
+- Example: `WeatherAgent._format_weather_narrative()`, `compare_locations()`, `get_forecast()`
+
+**Local Prompts** (For agent-specific functionality):
+- Stored as YAML files in `prompts/` directory
 - Use `{variable_name}` for variable substitution
-- Load with `PromptLoader.load_prompt(prompt_name, variables_dict)`
+- Load with `self._prompt_loader.load_prompt(prompt_name, variables_dict)`
 - Prompts include metadata: name, description, version, parameters, variables
-- Example usage in `WeatherAgent._format_weather_narrative()`
+- Pass loaded prompt to `await self.call_llm(prompt=content)`
+- Example: `analyze_weather()` with analysis_type "safety", "activity", or "travel"
+
+**Error Handling:**
+- When MCP prompts fail to load: Return error to user (no local backup)
+- When local prompts fail to load: Return error with specific file name
+- When LLM unavailable: Use simple text formatting fallback (see `_simple_format_fallback()`)
 
 ### When Handling Conversation Memory
 
@@ -276,7 +302,8 @@ pytest -m "not slow"    # Skip slow tests
 |----------|--------|---------|
 | `/health` | GET | System health and component status |
 | `/weather` | GET/POST | Current weather for location |
-| `/weather/analyze` | POST | LLM analysis of weather data |
+| `/weather/analyze` | POST | LLM analysis of weather data (general, safety, activity, travel) |
+| `/weather/severe-analysis` | POST | Severe weather analysis with safety recommendations (NEW) |
 | `/weather/compare` | POST | Compare multiple locations |
 | `/forecast` | GET/POST | Extended weather forecast |
 | `/chat` | POST | Natural language chat interface |
@@ -285,6 +312,8 @@ pytest -m "not slow"    # Skip slow tests
 | `/tools` | GET | List available MCP tools |
 | `/prompts` | GET | List available MCP prompts |
 | `/resources` | GET | List available MCP resources |
+| `/citations` | GET | API citation and attribution information (NEW) |
+| `/data-sources` | GET | Data source information and reliability (NEW) |
 | `/conversation/{thread_id}` | GET | Get thread summary |
 | `/conversation/{thread_id}` | DELETE | Clear thread history |
 

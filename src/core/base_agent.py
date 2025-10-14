@@ -6,26 +6,25 @@ This module provides a foundation for all agents in the system, standardizing
 how they interact with language models and MCP servers while reducing complexity.
 """
 
-import os
-import logging
-from typing import Dict, Any, Optional, List, Union, Tuple, TYPE_CHECKING
-from abc import ABC, abstractmethod
 import asyncio
-from datetime import datetime
+import logging
+import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..utilities.call_model import CallModel
-from ..utilities.llm_client import get_llm_client, LLMClient
+from ..utilities.llm_client import LLMClient, get_llm_client
+from .mcp_prompts import MCPPromptHandler, PromptResult
 
 # Import MCP handlers
 from .mcp_resources import MCPResourceHandler, ResourceContent
-from .mcp_prompts import MCPPromptHandler, PromptResult, PromptMessage
 
 # Type checking imports to avoid circular dependencies
 if TYPE_CHECKING:
-    from fastmcp import Client, FastMCP
-    from fastmcp.exceptions import ToolError
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +41,12 @@ class MCPTransportType(Enum):
 @dataclass
 class MCPConfig:
     """Configuration for MCP client connection."""
-    transport_type: Optional[MCPTransportType] = None
-    source: Optional[Union[str, Dict, Any]] = None  # URL, file path, FastMCP instance, or config dict
-    headers: Optional[Dict[str, str]] = None
-    env: Optional[Dict[str, str]] = None
+    transport_type: MCPTransportType | None = None
+    source: str | dict | Any | None = None  # URL, file path, FastMCP instance, or config dict
+    headers: dict[str, str] | None = None
+    env: dict[str, str] | None = None
     timeout: float = 30.0
-    auth_token: Optional[str] = None
+    auth_token: str | None = None
 
 
 class BaseAgent(ABC):
@@ -61,11 +60,11 @@ class BaseAgent(ABC):
         self,
         name: str,
         description: str = "",
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.3,
         max_retries: int = 3,
-        llm_client: Optional[LLMClient] = None,
-        mcp_config: Optional[Union[MCPConfig, str, Dict]] = None
+        llm_client: LLMClient | None = None,
+        mcp_config: MCPConfig | str | dict | None = None
     ):
         """
         Initialize the base agent with LLM and optional MCP capabilities.
@@ -91,23 +90,25 @@ class BaseAgent(ABC):
 
         # Initialize MCP configuration
         self.mcp_config = self._parse_mcp_config(mcp_config)
-        self._mcp_client: Optional[Any] = None  # Will be fastmcp.Client when initialized
-        self._mcp_tools: List[Any] = []
+        self._mcp_client: Any | None = None  # Will be fastmcp.Client when initialized
+        self._mcp_tools: list[Any] = []
         self._mcp_connected = False
 
         # Initialize MCP handlers
-        self._resource_handler: Optional[MCPResourceHandler] = None
-        self._prompt_handler: Optional[MCPPromptHandler] = None
+        self._resource_handler: MCPResourceHandler | None = None
+        self._prompt_handler: MCPPromptHandler | None = None
 
         # Metrics tracking
         self.call_count = 0
         self.error_count = 0
         self.total_tokens = 0
         self.mcp_tool_calls = 0
-        self.last_call_metadata: Optional[Dict[str, Any]] = None
+        self.mcp_prompt_calls = 0
+        self.last_call_metadata: dict[str, Any] | None = None
 
-        # Tool call history for the current session
-        self.tool_call_history: List[Dict[str, Any]] = []
+        # MCP operation history for the current session
+        self.tool_call_history: list[dict[str, Any]] = []
+        self.prompt_call_history: list[dict[str, Any]] = []
 
         logger.info(f"Initialized agent '{name}': {description}")
 
@@ -120,7 +121,7 @@ class BaseAgent(ABC):
         """
         return f"You are {self.name}, a helpful AI assistant. {self.description}"
 
-    def _parse_mcp_config(self, config: Optional[Union[MCPConfig, str, Dict]]) -> Optional[MCPConfig]:
+    def _parse_mcp_config(self, config: MCPConfig | str | dict | None) -> MCPConfig | None:
         """
         Parse MCP configuration from various formats.
 
@@ -215,8 +216,9 @@ class BaseAgent(ABC):
                     self._mcp_client = Client(transport, **kwargs)
                 elif self.mcp_config.transport_type == MCPTransportType.STDIO and self.mcp_config.env:
                     # Use StdioTransport with environment variables
-                    from fastmcp.transports import StdioTransport
                     import shlex
+
+                    from fastmcp.transports import StdioTransport
 
                     # Parse command from source
                     parts = shlex.split(self.mcp_config.source)
@@ -269,12 +271,15 @@ class BaseAgent(ABC):
                 self._mcp_connected = False
                 self._mcp_tools = []
 
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self, filter_tags: list[str] | None = None) -> list[dict[str, Any]]:
         """
-        List available MCP tools.
+        List available MCP tools, optionally filtered by tags.
+
+        Args:
+            filter_tags: Optional list of tags to filter by (e.g., ['analysis', 'weather'])
 
         Returns:
-            List of tool descriptions with name, description, and parameters
+            List of tool descriptions with name, description, parameters, and tags
         """
         if not self._mcp_connected:
             if not await self.connect_mcp():
@@ -282,6 +287,17 @@ class BaseAgent(ABC):
 
         tools_list = []
         for tool in self._mcp_tools:
+            # Extract tags
+            tool_tags = []
+            if hasattr(tool, 'meta') and tool.meta:
+                fastmcp_meta = tool.meta.get('_fastmcp', {})
+                tool_tags = fastmcp_meta.get('tags', [])
+
+            # Apply tag filter if specified
+            if filter_tags:
+                if not any(tag in tool_tags for tag in filter_tags):
+                    continue
+
             tool_info = {
                 "name": tool.name,
                 "description": getattr(tool, 'description', 'No description available')
@@ -292,10 +308,8 @@ class BaseAgent(ABC):
                 tool_info["parameters"] = tool.inputSchema
 
             # Add tags if available (FastMCP metadata)
-            if hasattr(tool, 'meta') and tool.meta:
-                fastmcp_meta = tool.meta.get('_fastmcp', {})
-                if fastmcp_meta.get('tags'):
-                    tool_info["tags"] = fastmcp_meta['tags']
+            if tool_tags:
+                tool_info["tags"] = tool_tags
 
             tools_list.append(tool_info)
 
@@ -304,21 +318,28 @@ class BaseAgent(ABC):
     async def call_tool(
         self,
         tool_name: str,
-        arguments: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-        raise_on_error: bool = True
-    ) -> Dict[str, Any]:
+        arguments: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        raise_on_error: bool = True,
+        progress_handler: Callable | None = None
+    ) -> dict[str, Any]:
         """
-        Call an MCP tool.
+        Call an MCP tool using FastMCP client.
+
+        FastMCP provides automatic type hydration in result.data, converting JSON
+        to complete Python objects (datetime, UUID, custom classes). Primitive
+        results (int, str, bool) are automatically unwrapped from {"result": value}.
 
         Args:
             tool_name: Name of the tool to call
             arguments: Tool arguments (optional)
             timeout: Override timeout for this call (optional)
             raise_on_error: Whether to raise exception on tool errors
+            progress_handler: Optional callback for progress updates on long-running tasks
 
         Returns:
-            Tool execution result with 'success', 'data', and optional 'error' keys
+            Tool execution result with 'success', 'data', and optional 'error' keys.
+            The 'data' field contains hydrated Python objects from FastMCP.
         """
         if not self._mcp_connected:
             if not await self.connect_mcp():
@@ -342,7 +363,8 @@ class BaseAgent(ABC):
                 tool_name,
                 arguments or {},
                 timeout=timeout or self.mcp_config.timeout if self.mcp_config else 30.0,
-                raise_on_error=raise_on_error
+                raise_on_error=raise_on_error,
+                progress_handler=progress_handler
             )
 
             # Track timing
@@ -374,10 +396,29 @@ class BaseAgent(ABC):
                 }
 
             # Extract data from result
+            # FastMCP provides fully hydrated Python objects in .data
             response_data = None
             if result.data is not None:
-                # FastMCP provides hydrated Python objects
+                # FastMCP provides hydrated Python objects - trust it!
                 response_data = result.data
+
+                # Convert Pydantic models to dicts for API compatibility
+                if hasattr(response_data, 'model_dump'):
+                    # Pydantic v2
+                    response_data = response_data.model_dump()
+                elif hasattr(response_data, 'dict'):
+                    # Pydantic v1
+                    response_data = response_data.dict()
+                # Handle Root objects from MCP protocol (these need dict conversion for compatibility)
+                elif hasattr(response_data, '__dict__') and not isinstance(response_data, (str, int, float, bool, list, dict)):
+                    # Convert object to dict if it has __dict__ but isn't a basic type
+                    try:
+                        response_data = {k: v for k, v in response_data.__dict__.items() if not k.startswith('_')}
+                    except Exception:
+                        # If conversion fails, keep as-is
+                        pass
+                # For all other types (int, str, datetime, UUID, etc.) keep as-is
+
             elif result.structured_content:
                 # Fallback to structured JSON
                 response_data = result.structured_content
@@ -443,7 +484,7 @@ class BaseAgent(ABC):
         """Clear the tool call history."""
         self.tool_call_history = []
 
-    def get_tool_call_history(self) -> List[Dict[str, Any]]:
+    def get_tool_call_history(self) -> list[dict[str, Any]]:
         """
         Get the current tool call history.
 
@@ -452,7 +493,37 @@ class BaseAgent(ABC):
         """
         return self.tool_call_history.copy()
 
-    async def get_tool_by_name(self, tool_name: str) -> Optional[Dict[str, Any]]:
+    def clear_prompt_call_history(self) -> None:
+        """Clear the prompt call history."""
+        self.prompt_call_history = []
+
+    def get_prompt_call_history(self) -> list[dict[str, Any]]:
+        """
+        Get the current prompt call history.
+
+        Returns:
+            List of prompt call records
+        """
+        return self.prompt_call_history.copy()
+
+    def get_mcp_history(self) -> dict[str, list[dict[str, Any]]]:
+        """
+        Get the complete MCP operation history including both tools and prompts.
+
+        Returns:
+            Dictionary with 'tools' and 'prompts' keys containing respective histories
+        """
+        return {
+            "tools": self.tool_call_history.copy(),
+            "prompts": self.prompt_call_history.copy()
+        }
+
+    def clear_mcp_history(self) -> None:
+        """Clear both tool and prompt call histories."""
+        self.tool_call_history = []
+        self.prompt_call_history = []
+
+    async def get_tool_by_name(self, tool_name: str) -> dict[str, Any] | None:
         """
         Get detailed information about a specific tool.
 
@@ -471,10 +542,10 @@ class BaseAgent(ABC):
     async def call_tool_with_retry(
         self,
         tool_name: str,
-        arguments: Optional[Dict[str, Any]] = None,
+        arguments: dict[str, Any] | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Call an MCP tool with automatic retry on failure.
 
@@ -507,6 +578,35 @@ class BaseAgent(ABC):
             "data": None
         }
 
+    async def call_tool_mcp(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None
+    ) -> Any:
+        """
+        Call an MCP tool and return the raw MCP protocol result.
+
+        This bypasses FastMCP's automatic deserialization and returns the raw
+        mcp.types.CallToolResult. Useful for debugging or special cases where
+        you need complete control over result processing.
+
+        Args:
+            tool_name: Name of the tool to call
+            arguments: Tool arguments (optional)
+
+        Returns:
+            Raw mcp.types.CallToolResult object or None if not connected
+        """
+        if not self._mcp_connected:
+            if not await self.connect_mcp():
+                return None
+
+        try:
+            return await self._mcp_client.call_tool_mcp(tool_name, arguments or {})
+        except Exception as e:
+            logger.error(f"Raw MCP tool call failed for '{tool_name}': {e}")
+            return None
+
     def has_mcp_capability(self) -> bool:
         """
         Check if this agent has MCP capabilities configured.
@@ -527,7 +627,7 @@ class BaseAgent(ABC):
 
     # Resource Operations
 
-    async def list_resources(self) -> List[Dict[str, Any]]:
+    async def list_resources(self) -> list[dict[str, Any]]:
         """
         List all static resources available on the MCP server.
 
@@ -542,7 +642,7 @@ class BaseAgent(ABC):
             return await self._resource_handler.list_resources()
         return []
 
-    async def list_resource_templates(self) -> List[Dict[str, Any]]:
+    async def list_resource_templates(self) -> list[dict[str, Any]]:
         """
         List all resource templates available on the MCP server.
 
@@ -557,7 +657,7 @@ class BaseAgent(ABC):
             return await self._resource_handler.list_resource_templates()
         return []
 
-    async def read_resource(self, uri: str) -> Optional[ResourceContent]:
+    async def read_resource(self, uri: str) -> ResourceContent | None:
         """
         Read content from a resource URI.
 
@@ -575,7 +675,7 @@ class BaseAgent(ABC):
             return await self._resource_handler.read_resource(uri)
         return None
 
-    async def read_json_resource(self, uri: str) -> Optional[Dict[str, Any]]:
+    async def read_json_resource(self, uri: str) -> dict[str, Any] | None:
         """
         Read a JSON resource and parse it.
 
@@ -614,7 +714,7 @@ class BaseAgent(ABC):
 
     # Prompt Operations
 
-    async def list_prompts(self) -> List[Dict[str, Any]]:
+    async def list_prompts(self) -> list[dict[str, Any]]:
         """
         List all available prompt templates on the MCP server.
 
@@ -632,7 +732,7 @@ class BaseAgent(ABC):
     async def get_prompt(
         self,
         prompt_name: str,
-        arguments: Optional[Dict[str, Any]] = None
+        arguments: dict[str, Any] | None = None
     ) -> PromptResult:
         """
         Get a rendered prompt with arguments.
@@ -644,9 +744,13 @@ class BaseAgent(ABC):
         Returns:
             PromptResult with generated messages
         """
+        # Track metrics
+        self.mcp_prompt_calls += 1
+        start_time = datetime.utcnow()
+
         if not self._mcp_connected:
             if not await self.connect_mcp():
-                return PromptResult(
+                error_result = PromptResult(
                     prompt_name=prompt_name,
                     messages=[],
                     arguments_used={},
@@ -654,22 +758,56 @@ class BaseAgent(ABC):
                     error="MCP server not connected"
                 )
 
-        if self._prompt_handler:
-            return await self._prompt_handler.get_prompt(prompt_name, arguments)
+                # Track failed prompt call
+                duration = (datetime.utcnow() - start_time).total_seconds()
+                prompt_call_record = {
+                    "timestamp": start_time.isoformat(),
+                    "prompt_name": prompt_name,
+                    "arguments": arguments or {},
+                    "duration": duration,
+                    "success": False,
+                    "error": "MCP server not connected",
+                    "messages": []
+                }
+                self.prompt_call_history.append(prompt_call_record)
 
-        return PromptResult(
-            prompt_name=prompt_name,
-            messages=[],
-            arguments_used={},
-            success=False,
-            error="Prompt handler not initialized"
-        )
+                return error_result
+
+        result = None
+        if self._prompt_handler:
+            result = await self._prompt_handler.get_prompt(prompt_name, arguments)
+        else:
+            result = PromptResult(
+                prompt_name=prompt_name,
+                messages=[],
+                arguments_used={},
+                success=False,
+                error="Prompt handler not initialized"
+            )
+
+        # Track timing and result
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        logger.debug(f"Prompt '{prompt_name}' completed in {duration:.2f}s")
+
+        # Track prompt call in history
+        prompt_call_record = {
+            "timestamp": start_time.isoformat(),
+            "prompt_name": prompt_name,
+            "arguments": arguments or {},
+            "duration": duration,
+            "success": result.success,
+            "error": result.error if not result.success else None,
+            "messages": [{"role": m.role, "content": m.content[:200] + "..." if len(m.content) > 200 else m.content} for m in result.messages] if result.messages else []
+        }
+        self.prompt_call_history.append(prompt_call_record)
+
+        return result
 
     async def get_system_prompt_from_mcp(
         self,
         prompt_name: str,
-        arguments: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]:
+        arguments: dict[str, Any] | None = None
+    ) -> str | None:
         """
         Get a system prompt message from an MCP prompt template.
 
@@ -691,8 +829,8 @@ class BaseAgent(ABC):
     async def get_conversation_from_mcp(
         self,
         prompt_name: str,
-        arguments: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, str]]:
+        arguments: dict[str, Any] | None = None
+    ) -> list[dict[str, str]]:
         """
         Get a conversation template from MCP as a list of messages.
 
@@ -714,11 +852,11 @@ class BaseAgent(ABC):
     async def call_llm(
         self,
         prompt: str,
-        schema: Optional[Dict[str, Any]] = None,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
+        schema: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
         **kwargs
-    ) -> Union[Dict, str, Tuple[Optional[Dict], List[Dict], bool]]:
+    ) -> dict | str | tuple[dict | None, list[dict], bool]:
         """
         Call the LLM with automatic error handling and metrics tracking.
 
@@ -770,7 +908,7 @@ class BaseAgent(ABC):
     async def think(
         self,
         context: str,
-        temperature: Optional[float] = None
+        temperature: float | None = None
     ) -> str:
         """
         Have the agent "think" about a context and return unstructured thoughts.
@@ -797,9 +935,9 @@ class BaseAgent(ABC):
     async def decide(
         self,
         question: str,
-        options: List[str],
-        context: Optional[str] = None
-    ) -> Dict[str, Any]:
+        options: list[str],
+        context: str | None = None
+    ) -> dict[str, Any]:
         """
         Have the agent make a decision between options.
 
@@ -855,9 +993,9 @@ class BaseAgent(ABC):
     async def extract(
         self,
         text: str,
-        extraction_schema: Dict[str, Any],
-        instructions: Optional[str] = None
-    ) -> Dict[str, Any]:
+        extraction_schema: dict[str, Any],
+        instructions: str | None = None
+    ) -> dict[str, Any]:
         """
         Extract structured information from unstructured text.
 
@@ -888,7 +1026,7 @@ class BaseAgent(ABC):
     async def summarize(
         self,
         text: str,
-        max_length: Optional[int] = None,
+        max_length: int | None = None,
         style: str = "concise"
     ) -> str:
         """
@@ -921,8 +1059,8 @@ class BaseAgent(ABC):
     async def chain_thought(
         self,
         problem: str,
-        steps: Optional[int] = None
-    ) -> Dict[str, Any]:
+        steps: int | None = None
+    ) -> dict[str, Any]:
         """
         Use chain-of-thought reasoning to solve a problem.
 
@@ -983,7 +1121,7 @@ class BaseAgent(ABC):
         self,
         success: bool,
         duration: float,
-        error: Optional[str] = None
+        error: str | None = None
     ):
         """
         Update internal metrics tracking.
@@ -1006,7 +1144,7 @@ class BaseAgent(ABC):
         else:
             logger.warning(f"Agent '{self.name}' call failed after {duration:.2f}s: {error}")
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """
         Get agent performance metrics.
 
@@ -1031,6 +1169,7 @@ class BaseAgent(ABC):
             metrics["mcp"] = {
                 "connected": self._mcp_connected,
                 "tool_calls": self.mcp_tool_calls,
+                "prompt_calls": self.mcp_prompt_calls,
                 "available_tools": len(self._mcp_tools)
             }
 
@@ -1039,7 +1178,7 @@ class BaseAgent(ABC):
     async def validate_response(
         self,
         response: Any,
-        validation_rules: Optional[Dict[str, Any]] = None
+        validation_rules: dict[str, Any] | None = None
     ) -> bool:
         """
         Validate an LLM response against custom rules.
@@ -1062,7 +1201,7 @@ class BaseAgent(ABC):
         return True
 
     @abstractmethod
-    async def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """
         Execute the main agent logic.
 
@@ -1085,17 +1224,24 @@ class BaseAgent(ABC):
         # Disconnect MCP if connected
         await self.disconnect_mcp()
 
-        if self.call_count > 0 or self.mcp_tool_calls > 0:
+        if self.call_count > 0 or self.mcp_tool_calls > 0 or self.mcp_prompt_calls > 0:
             metrics = self.get_metrics()
             log_msg = f"Agent '{self.name}' session complete: "
 
             if self.call_count > 0:
                 log_msg += f"{metrics['total_calls']} LLM calls, {metrics['success_rate']:.1%} success rate"
 
-            if self.mcp_tool_calls > 0:
+            if self.mcp_tool_calls > 0 or self.mcp_prompt_calls > 0:
                 if self.call_count > 0:
                     log_msg += ", "
-                log_msg += f"{self.mcp_tool_calls} MCP tool calls"
+
+                mcp_parts = []
+                if self.mcp_tool_calls > 0:
+                    mcp_parts.append(f"{self.mcp_tool_calls} tool calls")
+                if self.mcp_prompt_calls > 0:
+                    mcp_parts.append(f"{self.mcp_prompt_calls} prompt calls")
+
+                log_msg += f"MCP: {', '.join(mcp_parts)}"
 
             logger.info(log_msg)
 
@@ -1105,7 +1251,7 @@ class SimpleAgent(BaseAgent):
     A simple concrete implementation of BaseAgent for basic tasks.
     """
 
-    async def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """
         Execute simple agent logic.
 

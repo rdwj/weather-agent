@@ -614,8 +614,12 @@ def main():
             with st.spinner("Thinking..."):
                 response = send_chat_message(prompt)
 
-            # Display tool usage notifications if tools were called
-            tool_calls = response.get("tool_calls", [])
+            # Display MCP operations (tools and prompts)
+            mcp_ops = response.get("mcp_operations", {})
+            tool_calls = mcp_ops.get("tools", [])
+            prompt_calls = mcp_ops.get("prompts", [])
+
+            # Show tool usage notifications
             if tool_calls:
                 for tool_call in tool_calls:
                     tool_name = tool_call.get("tool_name", "unknown")
@@ -623,11 +627,19 @@ def main():
                     icon = "✅" if success else "❌"
 
                     # Format the tool usage message based on the tool
-                    if tool_name == "get-weather":
+                    if tool_name == "get_weather":
                         location = tool_call.get("arguments", {}).get("location", "unknown location")
                         st.info(f"🔧 Using tool: **{tool_name}** for {location} {icon}")
                     else:
                         st.info(f"🔧 Using tool: **{tool_name}** {icon}")
+
+            # Show prompt usage notifications
+            if prompt_calls:
+                for prompt_call in prompt_calls:
+                    prompt_name = prompt_call.get("prompt_name", "unknown")
+                    success = prompt_call.get("success", False)
+                    icon = "✅" if success else "❌"
+                    st.info(f"📝 Using prompt: **{prompt_name}** {icon}")
 
             if "error" in response:
                 st.error(response["error"])
