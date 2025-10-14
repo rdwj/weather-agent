@@ -6,6 +6,7 @@ Provides a unified interface for both structured and unstructured LLM responses
 
 import json
 import logging
+import re
 from typing import Dict, Any, Optional, List, Union, Tuple
 from datetime import datetime
 from jsonschema import validate, ValidationError  # type: ignore
@@ -142,19 +143,23 @@ class CallModel:
     ) -> Tuple[Optional[Dict], List[Dict], bool]:
         """
         Call model with JSON schema validation and retry logic
-        
+
         Args:
             prompt: The user prompt
             schema: JSON schema to validate against
             system_prompt: Optional system prompt
             temperature: Model temperature
             max_retries: Maximum retry attempts
-        
+
         Returns:
             Tuple of (validated_response, message_history, success)
         """
         if system_prompt is None:
-            system_prompt = "You are a helpful assistant that ALWAYS responds with valid JSON matching the provided schema. Output ONLY JSON, no additional text."
+            system_prompt = """You are a helpful assistant. Respond with JSON matching the provided schema.
+
+            IMPORTANT: The JSON in your response might be messy, incomplete, or have extra text around it - that's okay!
+            I'll extract whatever JSON I can find. Think of it like someone wrote JSON in crayon who isn't quite sure
+            what JSON is - just do your best to include the required fields somewhere in your response."""
         
         # Build initial messages
         messages = [
@@ -174,20 +179,38 @@ class CallModel:
             )
             raw_response = response_metadata.get('content', '')
             
-            # Try to parse as JSON
+            # Try to parse as JSON - be forgiving about extra text
             response = None
-            try:
-                # Clean up response
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned[7:]
-                if cleaned.startswith("```"):
-                    cleaned = cleaned[3:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                response = json.loads(cleaned.strip())
-            except json.JSONDecodeError:
-                response = None
+            cleaned = raw_response.strip()
+
+            # Try multiple extraction strategies
+            extraction_attempts = [
+                # Strategy 1: Direct parse (ideal case)
+                cleaned,
+                # Strategy 2: Remove markdown code blocks
+                cleaned[7:].strip() if cleaned.startswith("```json") else cleaned,
+                cleaned[3:].strip() if cleaned.startswith("```") else cleaned,
+                # Strategy 3: Find JSON between curly braces (extract from text)
+                None  # Will be computed below
+            ]
+
+            # Strategy 3: Extract anything that looks like JSON object from the text
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw_response, re.DOTALL)
+            if json_match:
+                extraction_attempts.append(json_match.group(0))
+
+            for extract in extraction_attempts:
+                if extract is None:
+                    continue
+                try:
+                    # Clean up trailing artifacts
+                    extract = extract.strip()
+                    if extract.endswith("```"):
+                        extract = extract[:-3].strip()
+                    response = json.loads(extract)
+                    break  # Success!
+                except json.JSONDecodeError:
+                    continue
             
             # Store in history
             message_history.append({

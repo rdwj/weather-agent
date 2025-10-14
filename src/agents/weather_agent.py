@@ -8,11 +8,11 @@ and LLM analysis.
 
 import json
 import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
-import asyncio
+from datetime import datetime
+from typing import Any
 
-from ..core.base_agent import BaseAgent, MCPConfig
+from ..core.base_agent import BaseAgent
+from ..core.conversation_memory import get_memory_manager
 from ..utilities.cache_manager import cache_manager
 from ..utilities.prompt_loader import get_prompt_loader
 
@@ -24,7 +24,7 @@ class WeatherAgent(BaseAgent):
     Production weather agent with comprehensive capabilities.
     """
 
-    def __init__(self, mcp_url: Optional[str] = None):
+    def __init__(self, mcp_url: str | None = None):
         """
         Initialize weather agent.
 
@@ -55,6 +55,9 @@ class WeatherAgent(BaseAgent):
         # Use shared cache manager (supports Redis in production)
         self._cache = cache_manager
 
+        # Initialize conversation memory manager
+        self._memory_manager = get_memory_manager()
+
     async def initialize(self) -> bool:
         """
         Initialize the agent and connect to MCP server.
@@ -71,7 +74,7 @@ class WeatherAgent(BaseAgent):
             # Connect to MCP server
             connected = await self.connect_mcp()
             if connected:
-                logger.info(f"Weather agent initialized with MCP server")
+                logger.info("Weather agent initialized with MCP server")
 
                 # List available capabilities
                 tools = await self.list_tools()
@@ -98,7 +101,7 @@ class WeatherAgent(BaseAgent):
         self,
         location: str,
         use_cache: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get weather for a location.
 
@@ -117,7 +120,7 @@ class WeatherAgent(BaseAgent):
             if cached_data:
                 logger.debug(f"Using cached weather for {location}")
                 # Generate narrative for cached data too
-                narrative = self._format_weather_narrative(cached_data)
+                narrative = await self._format_weather_narrative(cached_data)
                 return {
                     "success": True,
                     "data": cached_data,
@@ -138,7 +141,7 @@ class WeatherAgent(BaseAgent):
                 await self._cache.set(cache_key, result["data"])
 
                 # Generate a formatted narrative for the response
-                narrative = self._format_weather_narrative(result["data"])
+                narrative = await self._format_weather_narrative(result["data"])
 
                 return {
                     "success": True,
@@ -158,7 +161,7 @@ class WeatherAgent(BaseAgent):
                 "location": location
             }
 
-    async def _get_weather_with_geocoding(self, location: str) -> Dict[str, Any]:
+    async def _get_weather_with_geocoding(self, location: str) -> dict[str, Any]:
         """
         Get weather using geocoding fallback.
 
@@ -202,7 +205,7 @@ class WeatherAgent(BaseAgent):
                 await self._cache.set(cache_key, weather_result["data"])
 
                 # Generate narrative
-                narrative = self._format_weather_narrative(weather_result["data"])
+                narrative = await self._format_weather_narrative(weather_result["data"])
                 weather_result["narrative"] = narrative
 
             return weather_result
@@ -217,9 +220,9 @@ class WeatherAgent(BaseAgent):
 
     async def analyze_weather(
         self,
-        weather_data: Dict[str, Any],
+        weather_data: dict[str, Any],
         analysis_type: str = "general"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Analyze weather data using LLM or formatted narrative.
 
@@ -232,7 +235,7 @@ class WeatherAgent(BaseAgent):
         """
         if not self.llm_client.is_available():
             # Use simple formatted narrative when LLM not available
-            narrative = self._format_weather_narrative(weather_data)
+            narrative = await self._format_weather_narrative(weather_data)
             return {
                 "success": True,
                 "analysis": narrative,
@@ -297,9 +300,9 @@ class WeatherAgent(BaseAgent):
                 "error": str(e)
             }
 
-    def _format_weather_narrative(self, weather_data: Dict[str, Any]) -> str:
+    async def _format_weather_narrative(self, weather_data: dict[str, Any]) -> str:
         """
-        Format weather data as a nice narrative when LLM is not available.
+        Format weather data as a nice narrative using LLM with formatting prompt.
 
         Args:
             weather_data: Weather data dictionary
@@ -307,30 +310,54 @@ class WeatherAgent(BaseAgent):
         Returns:
             Formatted narrative string
         """
-        location = weather_data.get("location", "the requested location")
-        temp = weather_data.get("temperature", "N/A")
-        conditions = weather_data.get("conditions", "N/A")
-        humidity = weather_data.get("humidity", "N/A")
-        wind = weather_data.get("wind", "N/A")
-        forecast = weather_data.get("forecast", "")
+        # If LLM is not available, use simple formatting
+        if not self.llm_client.is_available():
+            location = weather_data.get("location", "the requested location")
+            temp = weather_data.get("temperature", "N/A")
+            conditions = weather_data.get("conditions", "N/A")
+            humidity = weather_data.get("humidity", "N/A")
+            wind = weather_data.get("wind", "N/A")
+            forecast = weather_data.get("forecast", "")
 
-        # Build narrative
-        narrative = f"Here's the current weather for **{location}**:\n\n"
-        narrative += f"🌡️ **Temperature:** {temp}\n"
-        narrative += f"☁️ **Conditions:** {conditions}\n"
-        narrative += f"💧 **Humidity:** {humidity}\n"
-        narrative += f"💨 **Wind:** {wind}\n"
+            # Build narrative
+            narrative = f"Here's the current weather for **{location}**:\n\n"
+            narrative += f"🌡️ **Temperature:** {temp}\n"
+            narrative += f"☁️ **Conditions:** {conditions}\n"
+            narrative += f"💧 **Humidity:** {humidity}\n"
+            narrative += f"💨 **Wind:** {wind}\n"
 
-        if forecast and forecast != "N/A":
-            narrative += f"\n📅 **Forecast:**\n{forecast}"
+            if forecast and forecast != "N/A":
+                narrative += f"\n📅 **Forecast:**\n{forecast}"
 
-        return narrative
+            return narrative
+
+        # Use LLM with formatting prompt
+        try:
+            # Load weather report formatting prompt
+            formatting_prompt = self._prompt_loader.load_prompt(
+                "weather_report_format",
+                {"weather_data": json.dumps(weather_data, indent=2)}
+            )
+
+            # Get formatted narrative from LLM
+            narrative = await self.call_llm(
+                prompt=formatting_prompt,
+                temperature=0.7
+            )
+
+            return narrative if isinstance(narrative, str) else str(narrative)
+
+        except Exception as e:
+            logger.error(f"Error formatting weather narrative: {e}")
+            # Fallback to simple format on error
+            location = weather_data.get("location", "the requested location")
+            return f"Weather data for {location}: {json.dumps(weather_data, indent=2)}"
 
     async def _analyze_with_custom_prompt(
         self,
-        weather_data: Dict[str, Any],
+        weather_data: dict[str, Any],
         analysis_type: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Analyze weather with custom prompt when MCP prompts unavailable.
         """
@@ -356,7 +383,7 @@ class WeatherAgent(BaseAgent):
             # Fallback to simple narrative
             return {
                 "success": True,
-                "analysis": self._format_weather_narrative(weather_data),
+                "analysis": await self._format_weather_narrative(weather_data),
                 "type": analysis_type,
                 "prompt_used": "fallback"
             }
@@ -373,8 +400,8 @@ class WeatherAgent(BaseAgent):
 
     async def compare_locations(
         self,
-        locations: List[str]
-    ) -> Dict[str, Any]:
+        locations: list[str]
+    ) -> dict[str, Any]:
         """
         Compare weather between multiple locations.
 
@@ -471,7 +498,7 @@ class WeatherAgent(BaseAgent):
         self,
         location: str,
         days: int = 5
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get extended forecast for a location.
 
@@ -542,106 +569,183 @@ class WeatherAgent(BaseAgent):
     async def chat(
         self,
         message: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Dict[str, Any]:
+        thread_id: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None
+    ) -> dict[str, Any]:
         """
-        Chat interface for natural language weather queries.
+        Chat interface for natural language weather queries with conversation memory.
 
         Args:
             message: User message
-            conversation_history: Previous conversation messages
+            thread_id: Optional thread ID for conversation persistence
+            conversation_history: Previous conversation messages (deprecated, use thread_id)
 
         Returns:
-            Agent response with weather information
+            Agent response with weather information and thread_id
         """
         try:
             # Clear tool history for this chat operation
             self.clear_tool_call_history()
 
+            # Get or create thread_id
+            import uuid
+            if not thread_id:
+                thread_id = str(uuid.uuid4())
+
+            # Get conversation context from memory
+            last_location = self._memory_manager.get_last_location(thread_id)
+            last_weather_data = self._memory_manager.get_last_weather_data(thread_id)
+
             # Extract intent and location from message
+            # NOTE: Schema is intentionally forgiving - LLM might write messy JSON
             extraction_schema = {
                 "type": "object",
                 "properties": {
                     "intent": {
                         "type": "string",
-                        "enum": ["current", "forecast", "comparison", "analysis", "general"]
+                        "enum": ["current", "forecast", "comparison", "analysis", "general", "follow_up"]
                     },
                     "locations": {
-                        "type": "array",
+                        "type": ["array", "null"],
                         "items": {"type": "string"}
                     },
                     "time_context": {
-                        "type": "string",
-                        "enum": ["now", "today", "tomorrow", "week", "weekend"]
+                        "type": ["string", "null"],
+                        "enum": ["now", "today", "tomorrow", "week", "weekend", None]
                     },
-                    "needs_clarification": {"type": "boolean"}
+                    "needs_clarification": {
+                        "type": ["boolean", "null"]
+                    },
+                    "references_previous": {
+                        "type": ["boolean", "null"]
+                    }
                 },
                 "required": ["intent"]
             }
 
             # Extract information from user message
+            extraction_instructions = f"""Extract weather query details from the user's message.
+
+IMPORTANT: Look carefully for location names in the query. Cities, states, countries - anything that indicates WHERE.
+Examples:
+- "weather in Boston" → locations: ["Boston"]
+- "what's it like in Paris, France?" → locations: ["Paris, France"]
+- "how's Scranton, NJ today?" → locations: ["Scranton, NJ"]
+- "weather forecast for Seattle" → locations: ["Seattle"], intent: "forecast"
+
+Previous location context: {last_location or 'none'}
+
+Only set needs_clarification to true if there is ABSOLUTELY NO location mentioned and no previous context."""
+
             extracted = await self.extract(
                 text=message,
                 extraction_schema=extraction_schema,
-                instructions="Extract weather query intent and locations"
+                instructions=extraction_instructions
             )
 
             # Handle based on intent
             if extracted.get("needs_clarification"):
+                clarification_msg = "I'd be happy to help with weather information. Could you please specify a location?"
+                # Update memory with clarification
+                self._memory_manager.update_conversation_state(
+                    thread_id=thread_id,
+                    user_message=message,
+                    assistant_response=clarification_msg,
+                    intent=extracted
+                )
                 return {
                     "success": True,
-                    "response": "I'd be happy to help with weather information. Could you please specify a location?",
-                    "needs_input": True
+                    "response": clarification_msg,
+                    "needs_input": True,
+                    "thread_id": thread_id
                 }
 
-            locations = extracted.get("locations", [])
+            locations = extracted.get("locations") or []
             intent = extracted.get("intent", "general")
 
+            # Handle follow-up queries or time-based queries that reference previous context
+            # If there's no location but we have context, use the previous location
+            if not locations and last_location:
+                if extracted.get("references_previous") or intent in ["follow_up", "forecast"]:
+                    locations = [last_location]
+                    logger.info(f"Using previous location from context: {last_location}")
+
             # Process based on intent
+            weather_data = None
+            response = ""
+
             if intent == "comparison" and len(locations) > 1:
                 result = await self.compare_locations(locations)
                 response = result.get("comparison", "Comparison completed")
+                weather_data = result.get("weather_data")
 
             elif intent == "forecast" and locations:
                 result = await self.get_forecast(locations[0])
                 response = result.get("forecast_analysis", result.get("forecast_text"))
+                weather_data = result.get("current")
 
             elif locations:
                 # Get weather for first location
                 weather_result = await self.get_weather(locations[0])
 
                 if weather_result["success"]:
-                    # Analyze based on intent
-                    analysis_type = "general" if intent == "current" else intent
-                    analysis_result = await self.analyze_weather(
-                        weather_result["data"],
-                        analysis_type
-                    )
-                    response = analysis_result.get("analysis", "Weather data retrieved")
+                    weather_data = weather_result["data"]
+                    # Use the narrative response (already formatted nicely)
+                    response = weather_result.get("narrative", "Weather data retrieved")
                 else:
                     response = f"I couldn't get weather for {locations[0]}. Please check the location name."
 
+            elif last_weather_data and ("format" in message.lower() or "report" in message.lower()):
+                # User is asking to format previous weather data
+                response = await self._format_weather_narrative(last_weather_data)
+                weather_data = last_weather_data
+                locations = [last_location] if last_location else []
+
             else:
                 response = "I can help you with weather information. Please specify a location like 'Seattle, WA' or 'London'."
+
+            # Update conversation memory
+            current_location = locations[0] if locations else last_location
+            logger.info(f"💾 Updating memory: thread={thread_id[:20]}, location={current_location}, locations={locations}")
+            self._memory_manager.update_conversation_state(
+                thread_id=thread_id,
+                user_message=message,
+                assistant_response=response,
+                location=current_location,
+                weather_data=weather_data,
+                intent=extracted
+            )
 
             return {
                 "success": True,
                 "response": response,
                 "intent": intent,
                 "locations": locations,
+                "thread_id": thread_id,
                 "tool_calls": self.get_tool_call_history()
             }
 
         except Exception as e:
             logger.error(f"Chat processing failed: {e}")
+            error_response = "I encountered an error processing your request. Please try again."
+
+            # Update memory with error
+            if thread_id:
+                self._memory_manager.update_conversation_state(
+                    thread_id=thread_id,
+                    user_message=message,
+                    assistant_response=error_response
+                )
+
             return {
                 "success": False,
-                "response": "I encountered an error processing your request. Please try again.",
+                "response": error_response,
                 "error": str(e),
+                "thread_id": thread_id,
                 "tool_calls": self.get_tool_call_history()
             }
 
-    async def execute(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """
         Execute weather agent tasks.
 
@@ -673,8 +777,9 @@ class WeatherAgent(BaseAgent):
 
         elif action == "chat":
             message = input_data.get("message", "")
+            thread_id = input_data.get("thread_id")
             history = input_data.get("history", [])
-            return await self.chat(message, history)
+            return await self.chat(message, thread_id, history)
 
         else:
             return {
@@ -687,7 +792,7 @@ class WeatherAgent(BaseAgent):
         await self._cache.clear()
         logger.info("Weather cache cleared")
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         return self._cache.get_stats()
 

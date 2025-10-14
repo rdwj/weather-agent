@@ -6,20 +6,20 @@ This API provides endpoints for weather data retrieval, analysis,
 and intelligent weather services.
 """
 
+import logging
 import os
 import sys
-from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
-import logging
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Body, BackgroundTasks
+# Load environment variables from .env file
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# Load environment variables from .env file
-from dotenv import load_dotenv
 load_dotenv()
 
 # Add parent directory to path for imports
@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global agent instance
-weather_agent: Optional[WeatherAgent] = None
+weather_agent: WeatherAgent | None = None
 
 
 # Pydantic models for request/response
@@ -47,7 +47,7 @@ class WeatherRequest(BaseModel):
 
 class WeatherAnalysisRequest(BaseModel):
     """Weather analysis request."""
-    weather_data: Dict[str, Any] = Field(..., description="Weather data to analyze")
+    weather_data: dict[str, Any] = Field(..., description="Weather data to analyze")
     analysis_type: str = Field(
         default="general",
         description="Type of analysis (general, safety, activity, travel)"
@@ -56,7 +56,7 @@ class WeatherAnalysisRequest(BaseModel):
 
 class LocationComparisonRequest(BaseModel):
     """Location comparison request."""
-    locations: List[str] = Field(
+    locations: list[str] = Field(
         ...,
         min_items=2,
         max_items=5,
@@ -78,9 +78,13 @@ class ForecastRequest(BaseModel):
 class ChatRequest(BaseModel):
     """Chat request model."""
     message: str = Field(..., description="User message")
-    conversation_history: Optional[List[Dict[str, str]]] = Field(
+    thread_id: str | None = Field(
         default=None,
-        description="Previous conversation messages"
+        description="Thread ID for conversation persistence (auto-generated if not provided)"
+    )
+    conversation_history: list[dict[str, str]] | None = Field(
+        default=None,
+        description="Previous conversation messages (deprecated, use thread_id)"
     )
 
 
@@ -89,7 +93,7 @@ class HealthResponse(BaseModel):
     status: str
     mcp_connected: bool
     llm_available: bool
-    cache_stats: Dict[str, Any]
+    cache_stats: dict[str, Any]
 
 
 @asynccontextmanager
@@ -326,20 +330,29 @@ async def get_forecast_post(request: ForecastRequest):
 @app.post("/chat")
 async def chat(request: ChatRequest):
     """
-    Natural language chat interface for weather queries.
+    Natural language chat interface for weather queries with conversation memory.
 
     Args:
-        request: Chat message and optional history
+        request: Chat message and optional thread_id for conversation persistence
 
     Returns:
-        Agent response
+        Agent response including thread_id for follow-up queries
+
+    Example:
+        First message (creates new thread):
+        {"message": "What's the weather in Seattle?"}
+        Response: {..., "thread_id": "abc-123"}
+
+        Follow-up message (continues conversation):
+        {"message": "How about tomorrow?", "thread_id": "abc-123"}
     """
     if not weather_agent:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
     result = await weather_agent.chat(
-        request.message,
-        request.conversation_history
+        message=request.message,
+        thread_id=request.thread_id,
+        conversation_history=request.conversation_history
     )
 
     if not result["success"]:
@@ -427,6 +440,57 @@ async def list_resources():
 
     resources = await weather_agent.list_resources()
     return {"resources": resources}
+
+
+@app.get("/conversation/{thread_id}")
+async def get_conversation_thread(thread_id: str):
+    """
+    Get conversation thread summary.
+
+    Args:
+        thread_id: Thread identifier
+
+    Returns:
+        Thread summary with metadata
+    """
+    if not weather_agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    summary = weather_agent._memory_manager.get_thread_summary(thread_id)
+
+    if not summary.get("exists", True):
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    return summary
+
+
+@app.delete("/conversation/{thread_id}")
+async def clear_conversation_thread(thread_id: str):
+    """
+    Clear conversation thread history.
+
+    Args:
+        thread_id: Thread identifier
+
+    Returns:
+        Success status
+    """
+    if not weather_agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    success = weather_agent._memory_manager.clear_thread(thread_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to clear conversation thread"
+        )
+
+    return {
+        "success": True,
+        "message": f"Conversation thread {thread_id} cleared",
+        "thread_id": thread_id
+    }
 
 
 # Error handlers

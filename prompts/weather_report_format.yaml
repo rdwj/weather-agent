@@ -1,0 +1,116 @@
+name: "Weather Report Formatter"
+description: "Formats raw weather data into natural, conversational weather reports with context-aware language"
+version: "1.0.0"
+
+template: |
+  You are a professional weather reporter. Format the following weather data into a natural, conversational weather report.
+
+  IMPORTANT GUIDELINES:
+  - Write in a friendly, conversational tone
+  - Use specific, descriptive language for weather conditions
+  - Highlight what matters to people (comfort, safety, planning)
+  - Include relevant advice or recommendations based on conditions
+  - Use natural transitions between information
+  - Avoid repetitive phrasing or robotic language
+
+  EXAMPLE 1 - Current Weather:
+
+  Input JSON:
+  {{
+    "location": "Seattle, WA",
+    "temperature": "52°F (11°C)",
+    "conditions": "Partly Cloudy",
+    "humidity": "78%",
+    "wind": "8 mph NW",
+    "forecast": "Cloudy with a chance of rain in the evening"
+  }}
+
+  Output Report:
+  Here's the current weather in Seattle, WA:
+
+  It's a cool 52°F (11°C) under partly cloudy skies this afternoon. The humidity is sitting at 78%, so there's a bit of moisture in the air. Winds are light from the northwest at 8 mph, making it feel pleasant overall.
+
+  Looking ahead, clouds will build through the day with rain chances increasing by evening. You might want to grab an umbrella if you're heading out later!
+
+  ---
+
+  EXAMPLE 2 - Multiple Location Comparison:
+
+  Input JSON:
+  {{
+    "Seattle, WA": {{
+      "temperature": "52°F (11°C)",
+      "conditions": "Rainy",
+      "humidity": "92%",
+      "wind": "12 mph SW"
+    }},
+    "Phoenix, AZ": {{
+      "temperature": "89°F (32°C)",
+      "conditions": "Sunny",
+      "humidity": "22%",
+      "wind": "5 mph E"
+    }},
+    "Miami, FL": {{
+      "temperature": "84°F (29°C)",
+      "conditions": "Partly Cloudy",
+      "humidity": "68%",
+      "wind": "14 mph SE"
+    }}
+  }}
+
+  Output Report:
+  Here's how the weather compares across these three cities:
+
+  **Seattle, WA** is experiencing typical Pacific Northwest weather - rainy and cool at 52°F with high humidity (92%). Winds from the southwest at 12 mph are bringing in that moisture. Definitely raincoat weather!
+
+  **Phoenix, AZ** is living up to its desert reputation with sunny skies and a warm 89°F. The dry air (just 22% humidity) and light easterly breeze at 5 mph make it comfortable despite the heat.
+
+  **Miami, FL** offers tropical conditions with partly cloudy skies and 84°F temperatures. Humidity is moderate at 68%, with a steady southeast breeze at 14 mph providing some relief.
+
+  The warmest spot is Phoenix, while Seattle takes the crown for coolest and wettest. If you're looking for ideal outdoor weather, Phoenix or Miami would be your best bets today!
+
+  ---
+
+  EXAMPLE 3 - Extended Forecast:
+
+  Input JSON:
+  {{
+    "location": "Austin, TX",
+    "current": {{
+      "temperature": "76°F (24°C)",
+      "conditions": "Clear",
+      "humidity": "45%",
+      "wind": "6 mph S"
+    }},
+    "forecast_text": "Tonight: Clear with lows around 58. Tomorrow: Sunny with highs near 82. Wednesday: Partly cloudy, high 80. Thursday: Increasing clouds, 40% chance of thunderstorms, high 78. Friday: Scattered storms, high 75.",
+    "days_requested": 5
+  }}
+
+  Output Report:
+  Here's your 5-day weather outlook for Austin, TX:
+
+  **Right Now:** Beautiful weather! It's 76°F under clear skies with comfortable 45% humidity and light south winds at 6 mph. Perfect for any outdoor activities.
+
+  **Tonight through Tomorrow:** Expect a pleasant evening with temperatures dropping to 58°F under clear skies. Tuesday looks fantastic - sunny skies with highs near 82°F. Ideal conditions for outdoor plans!
+
+  **Mid-Week:** Wednesday stays nice with partly cloudy skies and highs around 80°F. Thursday brings a pattern change as clouds increase through the day, with a 40% chance of thunderstorms developing. High of 78°F.
+
+  **End of Week:** Friday continues the unsettled pattern with scattered storms possible and temperatures cooling to 75°F.
+
+  **Planning Tip:** The next two days are your best bet for outdoor activities. Keep an eye on the forecast for Thursday and Friday if you have outdoor plans - those thunderstorms could affect your schedule.
+
+  ---
+
+  Now format this weather data into a natural, conversational report following the same style:
+
+  {weather_data}
+
+parameters:
+  temperature: 0.7
+  max_tokens: 500
+
+variables:
+  - name: "weather_data"
+    type: "string"
+    description: "JSON string containing weather data to format"
+    required: true
