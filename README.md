@@ -362,11 +362,88 @@ mypy src/
 
 ## 🔄 Scripts
 
-- `scripts/deploy-openshift.sh` - Full OpenShift deployment
-- `scripts/apply-secret.sh` - Update secrets from .env
-- `scripts/rebuild-openshift.sh` - Quick rebuild for code changes
-- `scripts/verify-deployment.sh` - Verify deployment health
-- `ui/run.sh` - Launch Streamlit UI
+### Deployment Scripts
+
+#### `./scripts/deploy-openshift.sh`
+**Full deployment to OpenShift**
+- Creates namespace if it doesn't exist
+- Applies all manifests (deployments, services, routes)
+- Creates BuildConfig and builds container
+- Applies secrets from `.env`
+- Sets up everything from scratch
+
+**Use when:**
+- First time deploying the project
+- You've made changes to manifests (YAML files)
+- You want to ensure everything is properly configured
+- Something is broken and you want to start fresh
+
+#### `./scripts/rebuild-openshift.sh`
+**Quick rebuild for code changes**
+- Deletes existing BuildConfig and ImageStream
+- Creates new BuildConfig
+- Triggers a fresh build from local code
+- **Note:** Does NOT restart deployments automatically
+
+**Use when:**
+- You modified Python code (src/, agents/, etc.)
+- You updated the UI (ui/weather_chat.py)
+- You want the latest code deployed
+- **After running:** Restart deployments with `oc rollout restart deployment <name> -n weather-agent`
+
+#### `./scripts/apply-secret.sh`
+**Update secrets/environment variables only**
+- Updates the `weather-agent-secret` from your `.env` file
+- Restarts both API and UI deployments automatically
+- No code rebuild
+
+**Use when:**
+- You changed API keys (LLM_API_KEY, etc.)
+- You updated MCP_URL
+- You modified any environment variables in `.env`
+- **Don't use** if you also changed code
+
+#### `./scripts/verify-deployment.sh`
+**Verify deployment health**
+- Checks namespace existence
+- Verifies pods are running
+- Tests API health endpoint
+- Shows routes
+
+**Use when:**
+- You want to verify deployment is healthy
+- Troubleshooting issues
+- After running other scripts to confirm success
+
+### Common Workflows
+
+**Code changes only:**
+```bash
+./scripts/rebuild-openshift.sh
+oc rollout restart deployment weather-agent-api -n weather-agent
+oc rollout restart deployment weather-agent-ui -n weather-agent
+```
+
+**Environment variable changes only:**
+```bash
+./scripts/apply-secret.sh
+# (This script handles the restart automatically)
+```
+
+**Both code AND environment changes:**
+```bash
+./scripts/rebuild-openshift.sh
+./scripts/apply-secret.sh
+```
+
+**Complete redeployment:**
+```bash
+./scripts/deploy-openshift.sh
+```
+
+### Other Scripts
+
+- `ui/run.sh` - Launch Streamlit UI locally
 
 ## 📈 Future Enhancements
 
