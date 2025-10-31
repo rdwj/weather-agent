@@ -116,6 +116,9 @@ spec:
             secretKeyRef:
               name: weather-agent-secrets
               key: API_SECRET_KEY
+        # Custom CA configuration
+        - name: SSL_CERT_FILE
+          value: /etc/pki/ca-trust/source/anchors/custom-ca.crt
         resources:
           requests:
             memory: "512Mi"
@@ -156,9 +159,19 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: custom-ca
+          mountPath: /etc/pki/ca-trust/source/anchors/custom-ca.crt
+          subPath: ca-bundle.crt
+          readOnly: true
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: custom-ca
+        configMap:
+          name: custom-ca-bundle
+          items:
+          - key: ca-bundle.crt
+            path: ca-bundle.crt
 ---
 apiVersion: v1
 kind: Service
