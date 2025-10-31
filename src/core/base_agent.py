@@ -207,11 +207,29 @@ class BaseAgent(ABC):
                     kwargs['auth'] = BearerAuth(self.mcp_config.auth_token)
 
                 if self.mcp_config.headers and self.mcp_config.transport_type == MCPTransportType.HTTP:
-                    # Use StreamableHttpTransport with headers
+                    # Use StreamableHttpTransport with headers and SSL verification
                     from fastmcp.transports import StreamableHttpTransport
+
+                    # Determine SSL verification strategy
+                    # Priority: SSL_CERT_FILE env var > service CA > system bundle
+                    verify_ssl = os.getenv("SSL_CERT_FILE")
+                    if not verify_ssl:
+                        # Try service CA (for internal OpenShift services)
+                        service_ca = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+                        if os.path.exists(service_ca):
+                            verify_ssl = service_ca
+                            logger.info(f"Using OpenShift service CA for SSL verification: {service_ca}")
+                        else:
+                            # Fall back to system CA bundle
+                            verify_ssl = "/etc/pki/tls/certs/ca-bundle.crt"
+                            logger.info(f"Using system CA bundle for SSL verification: {verify_ssl}")
+                    else:
+                        logger.info(f"Using SSL_CERT_FILE environment variable: {verify_ssl}")
+
                     transport = StreamableHttpTransport(
                         url=self.mcp_config.source,
-                        headers=self.mcp_config.headers
+                        headers=self.mcp_config.headers,
+                        verify=verify_ssl
                     )
                     self._mcp_client = Client(transport, **kwargs)
                 elif self.mcp_config.transport_type == MCPTransportType.STDIO and self.mcp_config.env:
